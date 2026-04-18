@@ -26,13 +26,22 @@ function getPasswordHash() {
   if (fs.existsSync(AUTH_FILE)) {
     try { return JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8')).hash; } catch {}
   }
-  // Fall back to env var (set in Render dashboard for first-time or post-redeploy)
   return process.env.SARI_PASSWORD_HASH || null;
 }
 
 function savePasswordHash(hash) {
   fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
   fs.writeFileSync(AUTH_FILE, JSON.stringify({ hash }), 'utf8');
+}
+
+// On startup: if SARI_INITIAL_PASSWORD is set and no hash exists yet, hash and save it automatically
+async function initAuth() {
+  if (!getPasswordHash() && process.env.SARI_INITIAL_PASSWORD) {
+    console.log('[auth] Hashing initial password from SARI_INITIAL_PASSWORD env var…');
+    const hash = await bcrypt.hash(process.env.SARI_INITIAL_PASSWORD, 12);
+    savePasswordHash(hash);
+    console.log('[auth] Initial password hashed and saved.');
+  }
 }
 
 function requireAuth(req, res, next) {
@@ -51,16 +60,21 @@ function requireAuth(req, res, next) {
 app.get('/login', (_, res) => res.sendFile(path.join(__dirname, 'login.html')));
 
 app.post('/auth/login', async (req, res) => {
-  const { password } = req.body;
-  if (!password) return res.status(400).json({ error: 'Password required.' });
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required.' });
+
+  const expectedUsername = (process.env.SARI_USERNAME || 'Saron').toLowerCase();
+  if (username.trim().toLowerCase() !== expectedUsername) {
+    return res.status(401).json({ error: 'Incorrect username or password.' });
+  }
 
   const hash = getPasswordHash();
   if (!hash) {
-    return res.status(500).json({ error: 'No password configured. Ask the admin to set SARI_PASSWORD_HASH in Render.' });
+    return res.status(500).json({ error: 'No password configured. Set SARI_INITIAL_PASSWORD in Render environment.' });
   }
 
   const valid = await bcrypt.compare(password, hash);
-  if (!valid) return res.status(401).json({ error: 'Incorrect password.' });
+  if (!valid) return res.status(401).json({ error: 'Incorrect username or password.' });
 
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, { expires: Date.now() + 7 * 24 * 60 * 60 * 1000 }); // 7 days
@@ -255,7 +269,8 @@ async function refresh() {
   }
 }
 
-refresh();
-setInterval(refresh, CACHE_TTL);
-
-app.listen(PORT, () => console.log(`Sari's Garden on :${PORT}`));
+initAuth().then(() => {
+  refresh();
+  setInterval(refresh, CACHE_TTL);
+  app.listen(PORT, () => console.log(`Sari's Garden on :${PORT}`));
+});

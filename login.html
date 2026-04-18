@@ -87,8 +87,12 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:var(--dark);min-heigh
 
   <form id="login-form" onsubmit="doLogin(event)">
     <div class="field">
+      <label>Username</label>
+      <input type="text" id="username" placeholder="Enter your username" autocomplete="username" autofocus>
+    </div>
+    <div class="field">
       <label>Password</label>
-      <input type="password" id="password" placeholder="Enter your password" autocomplete="current-password" autofocus>
+      <input type="password" id="password" placeholder="Enter your password" autocomplete="current-password">
     </div>
     <button type="submit" class="btn-login" id="login-btn">Sign In</button>
   </form>
@@ -100,6 +104,7 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:var(--dark);min-heigh
 <script>
 async function doLogin(e) {
   e.preventDefault();
+  const username = document.getElementById('username').value;
   const password = document.getElementById('password').value;
   const btn = document.getElementById('login-btn');
   const err = document.getElementById('error-msg');
@@ -113,7 +118,7 @@ async function doLogin(e) {
     const res = await fetch('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
+      body: JSON.stringify({ username, password })
     });
     const data = await res.json();
 
