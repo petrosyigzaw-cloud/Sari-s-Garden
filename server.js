@@ -13,14 +13,35 @@ const PORT = process.env.PORT || 3000;
 app.use(cookieParser());
 app.use(express.json());
 
-// Optional PubMed API key (env var) — raises rate limit from 3 to 10 req/sec
 const PM_KEY  = process.env.PUBMED_API_KEY ? `&api_key=${process.env.PUBMED_API_KEY}` : '';
 const PM_BASE = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/';
 const HEADERS = { 'User-Agent': 'SarisGarden/1.0 (medical research platform)' };
 
+// Refresh intervals
+const RSS_INTERVAL    = 30 * 60 * 1000;   // 30 minutes
+const PUBMED_INTERVAL =  2 * 60 * 60 * 1000; // 2 hours
+
+// ─── Push notifications via ntfy.sh ──────────────────────────────────────────
+// Set NTFY_TOPIC env var in Render to a unique string, e.g. "saris-garden-abc123"
+// Then subscribe to that topic in the ntfy app (ntfy.sh) to receive alerts.
+const NTFY_TOPIC = process.env.NTFY_TOPIC || null;
+
+async function notify(title, body, priority = 'default') {
+  if (!NTFY_TOPIC) return;
+  try {
+    await fetch(`https://ntfy.sh/${NTFY_TOPIC}`, {
+      method:  'POST',
+      headers: { 'Title': title, 'Priority': priority, 'Tags': 'stethoscope' },
+      body
+    });
+  } catch (e) {
+    console.error('[notify] Failed:', e.message);
+  }
+}
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 const AUTH_FILE = path.join(__dirname, 'data', 'auth.json');
-const sessions  = new Map(); // token → { expires }
+const sessions  = new Map();
 
 function getPasswordHash() {
   if (fs.existsSync(AUTH_FILE)) {
@@ -34,13 +55,12 @@ function savePasswordHash(hash) {
   fs.writeFileSync(AUTH_FILE, JSON.stringify({ hash }), 'utf8');
 }
 
-// On startup: if SARI_INITIAL_PASSWORD is set and no hash exists yet, hash and save it automatically
 async function initAuth() {
   if (!getPasswordHash() && process.env.SARI_INITIAL_PASSWORD) {
-    console.log('[auth] Hashing initial password from SARI_INITIAL_PASSWORD env var…');
+    console.log('[auth] Hashing initial password…');
     const hash = await bcrypt.hash(process.env.SARI_INITIAL_PASSWORD, 12);
     savePasswordHash(hash);
-    console.log('[auth] Initial password hashed and saved.');
+    console.log('[auth] Done.');
   }
 }
 
@@ -51,7 +71,6 @@ function requireAuth(req, res, next) {
     if (s.expires > Date.now()) return next();
     sessions.delete(token);
   }
-  // API routes → 401 JSON, page routes → redirect
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not authenticated' });
   res.redirect('/login');
 }
@@ -69,30 +88,24 @@ app.post('/auth/login', async (req, res) => {
   }
 
   const hash = getPasswordHash();
-  if (!hash) {
-    return res.status(500).json({ error: 'No password configured. Set SARI_INITIAL_PASSWORD in Render environment.' });
-  }
+  if (!hash) return res.status(500).json({ error: 'No password configured. Set SARI_INITIAL_PASSWORD in Render.' });
 
   const valid = await bcrypt.compare(password, hash);
   if (!valid) return res.status(401).json({ error: 'Incorrect username or password.' });
 
   const token = crypto.randomBytes(32).toString('hex');
-  sessions.set(token, { expires: Date.now() + 7 * 24 * 60 * 60 * 1000 }); // 7 days
-
+  sessions.set(token, { expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
   res.cookie('sg_session', token, {
-    httpOnly: true,
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production'
+    httpOnly: true, maxAge: 7 * 24 * 60 * 60 * 1000,
+    sameSite: 'lax', secure: process.env.NODE_ENV === 'production'
   });
   res.json({ ok: true });
 });
 
 app.post('/auth/change-password', requireAuth, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
-  if (!newPassword || newPassword.length < 6) {
+  if (!newPassword || newPassword.length < 6)
     return res.status(400).json({ error: 'New password must be at least 6 characters.' });
-  }
 
   const hash = getPasswordHash();
   if (hash) {
@@ -102,11 +115,7 @@ app.post('/auth/change-password', requireAuth, async (req, res) => {
 
   const newHash = await bcrypt.hash(newPassword, 12);
   savePasswordHash(newHash);
-
-  // Also log the hash so it can be set as SARI_PASSWORD_HASH env var if needed after a redeploy
-  console.log('[auth] Password changed. If redeployed, set this in Render env vars:');
-  console.log(`[auth] SARI_PASSWORD_HASH=${newHash}`);
-
+  console.log('[auth] Password changed.');
   res.json({ ok: true });
 });
 
@@ -117,63 +126,82 @@ app.get('/auth/logout', (req, res) => {
   res.redirect('/login');
 });
 
-// ─── Protected app & API routes ───────────────────────────────────────────────
+// ─── Protected routes ─────────────────────────────────────────────────────────
 app.get('/',             requireAuth, (_, res) => res.sendFile(path.join(__dirname, 'saris-garden.html')));
 app.get('/api/news',     requireAuth, (_, res) => res.json(cache.news));
 app.get('/api/journals', requireAuth, (_, res) => res.json(cache.journals));
 app.get('/api/status',   requireAuth, (_, res) => res.json({
-  lastFetch:    cache.lastFetch,
-  lastFetchAgo: cache.lastFetch ? Math.round((Date.now() - cache.lastFetch) / 60000) + ' min ago' : null,
-  newsCount:    cache.news.length,
-  journalCount: cache.journals.length,
+  lastNewsFetch:    cache.lastNewsFetch    ? new Date(cache.lastNewsFetch).toISOString()    : null,
+  lastJournalFetch: cache.lastJournalFetch ? new Date(cache.lastJournalFetch).toISOString() : null,
+  newsCount:        cache.news.length,
+  journalCount:     cache.journals.length,
+  sourceHealth:     cache.sourceHealth,
 }));
 
-// ─── In-memory cache ──────────────────────────────────────────────────────────
-let cache = { news: [], journals: [], lastFetch: null };
-const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
+// ─── Cache & failure tracking ─────────────────────────────────────────────────
+let cache = {
+  news: [], journals: [],
+  lastNewsFetch: null, lastJournalFetch: null,
+  sourceHealth: {}   // sourceName → { ok: bool, lastError: str, failCount: int }
+};
 
+// How many consecutive failures before we fire a notification
+const FAIL_THRESHOLD = 2;
+
+function recordSuccess(source) {
+  cache.sourceHealth[source] = { ok: true, lastError: null, failCount: 0 };
+}
+
+function recordFailure(source, message) {
+  const prev = cache.sourceHealth[source] || { failCount: 0 };
+  const failCount = (prev.failCount || 0) + 1;
+  cache.sourceHealth[source] = { ok: false, lastError: message, failCount };
+  return failCount;
+}
+
+// ─── RSS fetching ─────────────────────────────────────────────────────────────
 const rss = new Parser({
-  headers: HEADERS,
-  timeout: 12000,
+  headers: HEADERS, timeout: 12000,
   customFields: { item: [['media:content','mediaContent'],['media:thumbnail','mediaThumbnail']] }
 });
 
-// ─── Topic detection ──────────────────────────────────────────────────────────
 function detectTag(text = '') {
   const t = text.toLowerCase();
-  if (/cancer|oncol|tumor|tumour|chemotherapy|immunotherapy|car[-\s]?t|leukemia|lymphoma|carcinoma/.test(t)) return 'Oncology';
-  if (/cardiac|cardio|heart failure|coronary|myocardial|atrial fibrillation|hypertension|sglt2|statin|arrhythmia/.test(t)) return 'Cardiology';
-  if (/nutrition|diet\b|vitamin|mineral|supplement|obesity|bmi|metabolic syndrome|plant.based|malnutrition/.test(t)) return 'Nutrition';
-  if (/antimicrobial|antibiotic|resistance|sepsis|\bhiv\b|\btb\b|tuberculosis|malaria|\bcovid\b|influenza|mpox|cholera/.test(t)) return 'Infectious Disease';
+  if (/cancer|oncol|tumor|tumour|chemotherapy|immunotherapy|car[-\s]?t|leukemia|lymphoma/.test(t)) return 'Oncology';
+  if (/cardiac|cardio|heart failure|coronary|myocardial|atrial fibrillation|hypertension|sglt2|statin/.test(t)) return 'Cardiology';
+  if (/nutrition|diet\b|vitamin|mineral|supplement|obesity|bmi|metabolic syndrome|plant.based/.test(t)) return 'Nutrition';
+  if (/antimicrobial|antibiotic|resistance|sepsis|\bhiv\b|\btb\b|tuberculosis|malaria|\bcovid\b|mpox|cholera/.test(t)) return 'Infectious Disease';
   if (/alzheimer|parkinson|dementia|cognitive|seizure|epilepsy|multiple sclerosis|migraine|neurolog/.test(t)) return 'Neurology';
-  if (/diabet|insulin|thyroid|endocrin|glucose|hba1c|glp.1|semaglutide|tirzepatide|adrenal/.test(t)) return 'Endocrinology';
+  if (/diabet|insulin|thyroid|endocrin|glucose|hba1c|glp.1|semaglutide|tirzepatide/.test(t)) return 'Endocrinology';
   if (/\bwomen\b|maternal|pregnancy|obstetric|gynecol|menopause|fertility|cervical|endometriosis/.test(t)) return "Women's Health";
   if (/ethiopia|tropical medicine|neglected tropical|leishmaniasis|schistosomiasis/.test(t)) return 'Tropical & Global Health';
   if (/public health|epidemi|surveillance|vaccination|immunization|ncd|non-communicable/.test(t)) return 'Public Health';
   return 'General Medicine';
 }
 
-// ─── RSS sources ──────────────────────────────────────────────────────────────
 const RSS_SOURCES = [
   { url: 'https://www.statnews.com/feed/',                             source: 'STAT News',       siteUrl: 'https://www.statnews.com',          max: 7 },
   { url: 'https://www.who.int/rss-feeds/news-english.xml',            source: 'WHO',             siteUrl: 'https://www.who.int',               max: 5 },
   { url: 'https://africacdc.org/feed/',                                source: 'Africa CDC',      siteUrl: 'https://africacdc.org',             max: 4 },
-  { url: 'https://www.cochranelibrary.com/feed/cochrane-reviews-new', source: 'Cochrane Library',siteUrl: 'https://www.cochranelibrary.com',    max: 4 },
+  { url: 'https://www.cochranelibrary.com/feed/cochrane-reviews-new', source: 'Cochrane Library', siteUrl: 'https://www.cochranelibrary.com',   max: 4 },
   { url: 'https://www.medscape.com/cx/rss/medpulse.xml',              source: 'Medscape',        siteUrl: 'https://www.medscape.com',          max: 5 },
   { url: 'https://ephi.gov.et/feed/',                                  source: 'EPHI',            siteUrl: 'https://ephi.gov.et',               max: 3 },
 ];
 
-async function fetchFeeds() {
+async function refreshNews() {
+  console.log(`\n[${new Date().toISOString()}] Refreshing RSS feeds…`);
   const articles = [];
+  const newFailures = [];
+
   for (const src of RSS_SOURCES) {
     try {
       const feed = await Promise.race([
         rss.parseURL(src.url),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 13000))
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout after 13s')), 13000))
       ]);
       (feed.items || []).slice(0, src.max).forEach(item => {
         if (!item.title || !item.link) return;
-        const text = (item.title || '') + ' ' + (item.contentSnippet || item.summary || '');
+        const text = (item.title || '') + ' ' + (item.contentSnippet || '');
         articles.push({
           title:     item.title.trim(),
           site:      src.source,
@@ -181,25 +209,48 @@ async function fetchFeeds() {
           tag:       detectTag(text),
           summary:   item.contentSnippet ? item.contentSnippet.slice(0, 260).trim() : '',
           pubDate:   item.isoDate || item.pubDate || new Date().toISOString(),
-          img:       item.enclosure?.url || item.mediaContent?.$.url || item.mediaThumbnail?.$.url || null,
+          img:       item.enclosure?.url || item.mediaContent?.$.url || null,
           draft:     null
         });
       });
+      recordSuccess(src.source);
       console.log(`  ✓ ${src.source}`);
     } catch (e) {
-      console.warn(`  ✗ ${src.source}: ${e.message}`);
+      const count = recordFailure(src.source, e.message);
+      console.warn(`  ✗ ${src.source} (fail #${count}): ${e.message}`);
+      if (count >= FAIL_THRESHOLD) newFailures.push(`${src.source}: ${e.message}`);
     }
   }
-  return articles;
+
+  if (articles.length) { cache.news = articles; cache.lastNewsFetch = Date.now(); }
+  console.log(`[RSS] done — ${articles.length} articles`);
+
+  if (newFailures.length) {
+    await notify(
+      '⚠️ Sari\'s Garden — Feed Failures',
+      `${newFailures.length} source(s) failing:\n\n${newFailures.join('\n')}`,
+      'high'
+    );
+  }
+
+  // Alert if ALL sources failed
+  const allFailed = RSS_SOURCES.every(s => !(cache.sourceHealth[s.source]?.ok));
+  if (allFailed) {
+    await notify(
+      '🚨 Sari\'s Garden — All RSS Feeds Down',
+      'Every RSS source is failing. News content is not updating. Check server logs.',
+      'urgent'
+    );
+  }
 }
 
-// ─── PubMed ───────────────────────────────────────────────────────────────────
+// ─── PubMed fetching ──────────────────────────────────────────────────────────
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
 async function pmSearch(query, max = 5) {
   const url = `${PM_BASE}esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmax=${max}&sort=date&retmode=json${PM_KEY}`;
   const r = await fetch(url, { headers: HEADERS });
-  if (!r.ok) throw new Error(`esearch HTTP ${r.status}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return (await r.json()).esearchresult?.idlist || [];
 }
 
@@ -207,7 +258,7 @@ async function pmSummary(ids) {
   if (!ids.length) return {};
   const url = `${PM_BASE}esummary.fcgi?db=pubmed&id=${ids.join(',')}&retmode=json${PM_KEY}`;
   const r = await fetch(url, { headers: HEADERS });
-  if (!r.ok) throw new Error(`esummary HTTP ${r.status}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return (await r.json()).result || {};
 }
 
@@ -225,8 +276,12 @@ const JOURNAL_QUERIES = [
   { cat: 'Ethiopian Medicine',      q: 'Ethiopia[Affiliation] AND (health OR medicine OR disease) AND "last 2 years"[edat]' },
 ];
 
-async function fetchJournals() {
+async function refreshJournals() {
+  console.log(`\n[${new Date().toISOString()}] Refreshing PubMed journals…`);
   const journals = [];
+  const newFailures = [];
+  let successCount = 0;
+
   for (const { cat, q } of JOURNAL_QUERIES) {
     try {
       const ids = await pmSearch(q, 4);
@@ -246,31 +301,53 @@ async function fetchJournals() {
           });
         });
       }
-      console.log(`  ✓ PubMed (${cat}): ${ids.length}`);
+      recordSuccess(`PubMed:${cat}`);
+      successCount++;
       await delay(350);
     } catch (e) {
-      console.warn(`  ✗ PubMed (${cat}): ${e.message}`);
+      const count = recordFailure(`PubMed:${cat}`, e.message);
+      console.warn(`  ✗ PubMed (${cat}) fail #${count}: ${e.message}`);
+      if (count >= FAIL_THRESHOLD) newFailures.push(`PubMed (${cat}): ${e.message}`);
       await delay(500);
     }
   }
-  return journals;
-}
 
-async function refresh() {
-  console.log(`\n[${new Date().toISOString()}] Refreshing content cache…`);
-  try {
-    const [news, journals] = await Promise.all([fetchFeeds(), fetchJournals()]);
-    if (news.length)     cache.news     = news;
-    if (journals.length) cache.journals = journals;
-    cache.lastFetch = Date.now();
-    console.log(`[cache] ${cache.news.length} news · ${cache.journals.length} journals`);
-  } catch (e) {
-    console.error('[cache] refresh failed:', e);
+  if (journals.length) { cache.journals = journals; cache.lastJournalFetch = Date.now(); }
+  console.log(`[PubMed] done — ${journals.length} articles across ${successCount} categories`);
+
+  if (newFailures.length) {
+    await notify(
+      '⚠️ Sari\'s Garden — PubMed Failures',
+      `${newFailures.length} PubMed categor${newFailures.length > 1 ? 'ies' : 'y'} failing:\n\n${newFailures.join('\n')}`,
+      'high'
+    );
   }
 }
 
+// ─── Scheduler ────────────────────────────────────────────────────────────────
+async function startScheduler() {
+  // Run both immediately on startup
+  await refreshNews();
+  await refreshJournals();
+
+  // RSS: every 30 minutes
+  setInterval(refreshNews, RSS_INTERVAL);
+
+  // PubMed: every 2 hours
+  setInterval(refreshJournals, PUBMED_INTERVAL);
+
+  // Send a startup notification so you know the server came online
+  await notify(
+    '🌷 Sari\'s Garden is online',
+    `Server started. Crawling ${RSS_SOURCES.length} RSS sources every 30 min + PubMed every 2 hours.`,
+    'low'
+  );
+}
+
+// ─── Start ────────────────────────────────────────────────────────────────────
 initAuth().then(() => {
-  refresh();
-  setInterval(refresh, CACHE_TTL);
-  app.listen(PORT, () => console.log(`Sari's Garden on :${PORT}`));
+  app.listen(PORT, () => {
+    console.log(`Sari's Garden on :${PORT}`);
+    startScheduler();
+  });
 });
