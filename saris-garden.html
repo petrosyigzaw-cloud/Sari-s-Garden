@@ -1048,20 +1048,20 @@ const JOURNAL_CLOSING_POOLS = {
   ],
 };
 
-// Per-category opener pools for NEWS drafts (used as fallback if summary is thin)
+// Per-category opener pools — fallback when no topic signal in title
 const NEWS_OPENER_POOLS = {
-  'Oncology':               ['Oncology data worth pausing on:','A piece from oncology that landed for me:','Something in the cancer space worth knowing:','This oncology update caught my attention:'],
-  'Cardiology':             ['A cardiovascular finding worth knowing:','Something in cardiology worth slowing down for:','Cardiology evidence that belongs in more clinical conversations:','A cardiac data point I keep thinking about:'],
-  'Nutrition':              ['Nutrition research that should be getting more clinical airtime:','A nutrition finding worth knowing:','Something from nutrition science worth sharing:','This dietary research is worth knowing about:'],
-  'Infectious Disease':     ['Infectious disease data that has direct clinical implications:','Something in the ID space worth knowing:','A finding in antimicrobials or infection that matters:','Infectious disease evidence worth staying current on:'],
-  'Neurology':              ['A neurological finding worth knowing:','Something from neurology worth sharing:','Neurology data that landed for me:','A neuroscience update worth knowing:'],
-  'Endocrinology':          ['Metabolic medicine data worth knowing:','A finding in diabetes or obesity medicine worth sharing:','Something from endocrinology that caught my attention:','Metabolic disease evidence worth staying current on:'],
-  "Women's Health":         ["Women's health research that deserves more attention:",'A maternal or reproductive health finding worth knowing:','Something from women\'s health worth sharing:',"Women's health data that should be informing practice:"],
-  'Public Health':          ['Public health data worth knowing — clinically and otherwise:','A population-level finding with direct clinical implications:','Something from public health worth sharing broadly:','Public health evidence that belongs in clinical conversations:'],
-  'Tropical & Global Health':['Global health data that deserves more attention:','A finding in tropical or global health worth knowing:','Something from global health that matters closer to home too:','A global disease burden finding worth knowing:'],
-  'Ethiopian Medicine':     ['Something from the Ethiopian health landscape worth sharing:','Ethiopian medical research worth knowing about:','A finding from Ethiopia worth a wider readership:','Regional health data from Ethiopia worth sharing:'],
-  'General Medicine':       ['A clinical finding worth knowing:','Something in medicine worth sharing:','A piece from the literature that caught my attention:','Clinical data worth staying current on:'],
-  'Medical Technology':     ['Something in health tech worth paying attention to:','AI and medicine — the honest version of this story:','Digital health data worth knowing about:','A health technology finding worth knowing:'],
+  'Oncology':               ['New data in the cancer space worth knowing:','A trial result in oncology that updates the picture:','This finding in oncology has real clinical weight:','Evidence in cancer medicine that belongs in more conversations:'],
+  'Cardiology':             ['Cardiovascular data that changes how I think about risk:','A trial result in cardiology worth filing away:','New evidence in cardiac medicine — direct clinical implications:','Worth knowing: the cardiovascular evidence base just shifted here.'],
+  'Nutrition':              ['Nutrition data that should be getting more clinical airtime:','A dietary finding with implications beyond lifestyle medicine:','The evidence on this nutritional question is clearer than it used to be:','New data on nutrition that's directly applicable in practice:'],
+  'Infectious Disease':     ['Antimicrobial resistance data that every prescriber should see:','New evidence in infectious disease with direct clinical implications:','An ID finding that changes how I approach this:','The evidence on this infection question just got clearer:'],
+  'Neurology':              ['New data in neurology that changes the clinical picture:','A trial result in neurological disease worth knowing about:','Evidence in brain health that clinical practice hasn\'t fully caught up to:','This neurological finding is worth tracking:'],
+  'Endocrinology':          ['Metabolic disease evidence that has shifted recently:','New data on diabetes and obesity management that\'s practice-changing:','The evidence on this metabolic question is worth updating on:','A finding in endocrinology with cardiometabolic implications:'],
+  "Women's Health":         ["New evidence in women's health that should be informing practice:",'A maternal health finding that deserves more clinical attention:','The data on this women\'s health question has changed:','Evidence in reproductive medicine that\'s worth knowing:'],
+  'Public Health':          ['Population-level data with direct clinical implications:','A public health finding that changes how I think about prevention:','New evidence at the population level — worth understanding the clinical angle:','This public health data belongs in clinical conversations:'],
+  'Tropical & Global Health':['Global health evidence that rarely gets the clinical attention it deserves:','New data in tropical medicine worth knowing:','A disease burden finding that should be on more clinicians\' radar:','This global health finding has implications that extend well beyond the region:'],
+  'Ethiopian Medicine':     ['New research from Ethiopia that deserves a wider readership:','Ethiopian health data that should be informing practice here:','A finding from the Ethiopian medical literature worth knowing:','Local evidence is the most actionable evidence — this is worth reading:'],
+  'General Medicine':       ['Clinical evidence worth updating on:','A finding that applies broadly regardless of specialty:','New data that changes how I approach this clinically:','Worth knowing: the evidence here has moved.'],
+  'Medical Technology':     ['Health technology evidence that goes beyond the hype:','New data on AI and medicine — the honest version of this:','Digital health research that clinical practice needs to engage with:','A finding in health technology with real workflow implications:'],
 };
 
 // Per-category closings for NEWS drafts (brief — 1 sentence)
@@ -1209,41 +1209,91 @@ function cleanArticleTitle(title){
   return(t&&t.length>8)?t:title;
 }
 
-// Build an explanatory fallback draft — no API key needed
+// Client-side HTML entity decoder (defense-in-depth against server-side misses)
+function cleanContent(text){
+  return(text||'')
+    .replace(/&#x([0-9A-Fa-f]+);/g,(_,h)=>{try{return String.fromCharCode(parseInt(h,16));}catch{return'';}})
+    .replace(/&#(\d+);/g,(_,d)=>{try{return String.fromCharCode(parseInt(d,10));}catch{return'';}})
+    .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<')
+    .replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'")
+    .replace(/\s{2,}/g,' ').trim();
+}
+const CLIENT_PROMO_RE=/sign up|subscribe|newsletter|stay on top|click here|read more|want to stay|in your inbox|biotech today|our coverage|to get our|follow us|advertising|sponsored/i;
+function filterPromo(text){
+  return(text||'').split(/(?<=[.!?])\s+/).filter(s=>!CLIENT_PROMO_RE.test(s)).join(' ').trim();
+}
+
+// Build a topic-aware fallback draft — no API key needed
 function generateNewsDraft(a){
   if(a.draft) return a.draft;
   const tags=TEMPLATE_HASHTAGS[a.tag]||'#MedicalResearch #ClinicalMedicine';
-
-  // Use fullText when available (richer); fall back to summary
-  const content=(a.fullText||a.summary||'').trim();
-
-  // Sentences from content, filtering out very short or boilerplate ones
-  const sentences=(content.match(/[^.!?]{20,}[.!?]/g)||[]).map(s=>s.trim());
-  // Skip opening quotes or bylines ("Smith said..." / "NEW YORK —")
-  const usable=sentences.filter(s=>!/^["""'']/.test(s)&&!/^[A-Z]{2,}\s*[—–]/.test(s)&&s.length>40);
-
   const cleanTitle=cleanArticleTitle(a.title);
 
-  // Opening: what is this article actually about?
-  // Frame it as "I read something and here is what it covers"
-  const frameOpeners=[
-    `Something I read from ${a.site} this week that's worth knowing about.`,
-    `A piece from ${a.site} that caught my attention:`,
-    `This came up from ${a.site} and I think it's worth sharing.`,
-    `Reading through ${a.site} today — this one stood out.`,
-  ];
-  const frame=pick(frameOpeners, a.title+a.site);
+  // Clean and filter content
+  const rawContent=cleanContent(a.fullText||a.summary||'');
+  const content=filterPromo(rawContent);
 
-  // Core content: pull the 2-3 most substantive sentences
-  const core=usable.slice(0,3).join(' ').slice(0,350).trim();
+  // Extract usable sentences
+  const sentences=(content.match(/[^.!?]{20,}[.!?]/g)||[]).map(s=>s.trim());
+  const usable=sentences.filter(s=>
+    !/^["""'']/.test(s)&&
+    !/^[A-Z]{2,}\s*[—–]/.test(s)&&
+    !CLIENT_PROMO_RE.test(s)&&
+    s.length>40
+  );
 
-  // Closing observation from pool
-  const closing=pick(NEWS_CLOSING_POOLS[a.tag]||NEWS_CLOSING_POOLS['General Medicine'],a.title+a.site);
+  // Topic-aware opener derived from the title itself — no source name
+  const tl=(cleanTitle+' '+content).toLowerCase();
+  let opener;
+  if(/fda|ema|approved?|approval|authorization|regulatory agency/i.test(cleanTitle)){
+    opener=pick([
+      'A regulatory decision that\'s worth understanding:',
+      'The approval picture just shifted here:',
+      'This decision has direct clinical implications:',
+      'Regulatory news that clinicians should know about:',
+    ],cleanTitle);
+  } else if(/trial|randomized|rct|phase [123]|placebo.controlled/i.test(tl)){
+    opener=pick([
+      'New trial data worth knowing about:',
+      'A clinical trial result that changes the picture:',
+      'RCT evidence that\'s directly applicable in practice:',
+      'Trial data worth filing away:',
+    ],cleanTitle);
+  } else if(/guideline|consensus statement|recommendation|clinical practice update/i.test(tl)){
+    opener=pick([
+      'Guidelines on this have just been updated — worth reading:',
+      'Clinical guidance shifted here. This matters in practice:',
+      'A practice recommendation worth knowing about:',
+      'Updated guidance on this — the key changes are worth understanding:',
+    ],cleanTitle);
+  } else if(/mortality|survival|prognosis|outcome data|risk factor/i.test(tl)){
+    opener=pick([
+      'New outcome data that updates how I think about this:',
+      'Risk data with direct clinical implications:',
+      'These survival figures are worth internalizing:',
+      'Prognosis data that shifts the picture:',
+    ],cleanTitle);
+  } else if(/drug|therapy|treatment|medication|dose|dosing/i.test(tl)){
+    opener=pick([
+      'New evidence on this treatment that\'s clinically relevant:',
+      'The evidence base for this therapy just got clearer:',
+      'Treatment data worth knowing — this changes the approach:',
+      'An update on this medication that clinical practice should reflect:',
+    ],cleanTitle);
+  } else {
+    opener=pick(NEWS_OPENER_POOLS[a.tag]||NEWS_OPENER_POOLS['General Medicine'],cleanTitle);
+  }
 
-  const parts=[`${frame}\n\n${cleanTitle}.`];
+  // Core content — up to 3 most informative sentences
+  const core=usable.slice(0,3).join(' ').slice(0,380).trim();
+
+  // Closing
+  const closing=pick(NEWS_CLOSING_POOLS[a.tag]||NEWS_CLOSING_POOLS['General Medicine'],cleanTitle+a.site);
+
+  const parts=[`${opener}\n\n${cleanTitle}.`];
   if(core) parts.push(core);
   parts.push(closing);
-  parts.push(`📖 ${a.site}\n${a.sourceUrl}`);
+  parts.push(`📖 ${a.site}`);
   parts.push(tags);
   return parts.join('\n\n');
 }
@@ -1264,7 +1314,7 @@ async function draftNewsPost(idx){
   if(getApiKey()){
     ta.value='Generating draft…';ta.disabled=true;
     const content=a.fullText||a.summary||'';
-    const sys=`You are helping Dr. Sari, an Ethiopian medical researcher and physician, write a LinkedIn post about an article she just read. She paraphrases in her own voice — first person, specific, human. Not corporate. Not AI-sounding. No "paradigm shift", no "it is clear that", no "I encourage every clinician". She explains what the article is actually about and why it matters clinically, as if telling a colleague. 150–220 words. End with 3–4 relevant hashtags. Do NOT open with the article title verbatim. Do NOT mention the source name at the top — the source is cited at the bottom.`;
+    const sys=`You are helping Dr. Sari, an Ethiopian medical researcher and physician, write a LinkedIn post about an article she just read. She writes in first person, specific and human — not corporate, not AI-sounding. No "paradigm shift", no "it is clear that", no "I encourage every clinician to". She opens by getting straight to what the article covers — a finding, a decision, a result — not by naming the source. She explains what was found and why it matters clinically, as if telling a colleague in a hallway. 150–220 words. End the post with "📖 [source name]" on its own line, then 3–4 relevant hashtags. Do NOT open with the article title verbatim. Do NOT mention the source name at the top of the post. Do NOT include any URL in the post body.`;
     const user=`Article title: ${cleanArticleTitle(a.title)}\nSource: ${a.site}\n\nContent:\n${content||'(only title available)'}`;
     try{
       const result=await callClaude(sys,user);
