@@ -162,8 +162,21 @@ function recordFailure(source, message) {
 // ─── RSS fetching ─────────────────────────────────────────────────────────────
 const rss = new Parser({
   headers: HEADERS, timeout: 12000,
-  customFields: { item: [['media:content','mediaContent'],['media:thumbnail','mediaThumbnail']] }
+  customFields: { item: [
+    ['media:content','mediaContent'],
+    ['media:thumbnail','mediaThumbnail'],
+    ['content:encoded','contentEncoded'],
+    ['content','contentFull']
+  ]}
 });
+
+function stripHtml(html=''){
+  return html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi,'')
+             .replace(/<script[^>]*>[\s\S]*?<\/script>/gi,'')
+             .replace(/<[^>]+>/g,' ')
+             .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"')
+             .replace(/\s{2,}/g,' ').trim();
+}
 
 function detectTag(text = '') {
   const t = text.toLowerCase();
@@ -202,15 +215,19 @@ async function refreshNews() {
       (feed.items || []).slice(0, src.max).forEach(item => {
         if (!item.title || !item.link) return;
         const text = (item.title || '') + ' ' + (item.contentSnippet || '');
+        // Prefer full content for richer drafts; fall back to snippet
+        const fullText = stripHtml(item.contentEncoded || item.contentFull || '');
+        const snippet  = item.contentSnippet ? item.contentSnippet.trim() : '';
         articles.push({
-          title:     item.title.trim(),
-          site:      src.source,
-          sourceUrl: item.link,
-          tag:       detectTag(text),
-          summary:   item.contentSnippet ? item.contentSnippet.slice(0, 260).trim() : '',
-          pubDate:   item.isoDate || item.pubDate || new Date().toISOString(),
-          img:       item.enclosure?.url || item.mediaContent?.$.url || null,
-          draft:     null
+          title:    item.title.trim(),
+          site:     src.source,
+          sourceUrl:item.link,
+          tag:      detectTag(text),
+          summary:  snippet.slice(0, 300),
+          fullText: fullText.slice(0, 900), // more content for draft generation
+          pubDate:  item.isoDate || item.pubDate || new Date().toISOString(),
+          img:      item.enclosure?.url || item.mediaContent?.$.url || null,
+          draft:    null
         });
       });
       recordSuccess(src.source);

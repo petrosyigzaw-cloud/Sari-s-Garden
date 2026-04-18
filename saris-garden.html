@@ -32,18 +32,18 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(-
 .brand-title{font-family:'Syne',sans-serif;font-size:17px;font-weight:800;color:#2D0A1E;letter-spacing:-.2px;}
 .brand-sub{font-size:11.5px;color:rgba(80,20,60,.5);margin-top:2px;}
 #nav{padding:16px 12px;flex:1;overflow-y:auto;}
-.nav-section-label{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:rgba(80,20,60,.4);padding:0 10px;margin:8px 0 6px;}
-.nav-item{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:10px;cursor:pointer;color:rgba(60,10,40,.6);font-size:13.5px;font-weight:500;transition:all .18s;position:relative;margin-bottom:2px;user-select:none;}
-.nav-item:hover{color:#2D0A1E;background:rgba(0,0,0,.06);}
-.nav-item.active{color:#2D0A1E;background:rgba(255,107,157,.22);font-weight:600;}
+.nav-section-label{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:rgba(40,5,30,.52);padding:0 10px;margin:8px 0 6px;}
+.nav-item{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:10px;cursor:pointer;color:rgba(40,5,30,.78);font-size:13.5px;font-weight:500;transition:all .18s;position:relative;margin-bottom:2px;user-select:none;}
+.nav-item:hover{color:#1A0010;background:rgba(0,0,0,.07);}
+.nav-item.active{color:#1A0010;background:rgba(255,107,157,.25);font-weight:600;}
 .nav-item.active::before{content:'';position:absolute;left:0;top:8px;bottom:8px;width:3px;background:var(--grad);border-radius:99px;}
 .nav-icon{font-size:16px;width:20px;text-align:center;flex-shrink:0;}
 .sidebar-footer{padding:14px 22px;border-top:1px solid rgba(200,120,180,.18);}
 .sidebar-footer-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
 #clock{font-family:'Syne',sans-serif;font-size:18px;font-weight:700;color:#2D0A1E;}
 #date-display{font-size:11px;color:rgba(80,20,60,.5);}
-.settings-btn{background:none;border:none;cursor:pointer;color:rgba(80,20,60,.45);font-size:16px;padding:4px;border-radius:6px;transition:color .18s;}
-.settings-btn:hover{color:#2D0A1E;}
+.settings-btn{background:none;border:none;cursor:pointer;color:rgba(40,5,30,.62);font-size:16px;padding:4px;border-radius:6px;transition:color .18s;}
+.settings-btn:hover{color:#1A0010;}
 
 /* BOTTOM NAV (mobile only) */
 #bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;height:62px;background:linear-gradient(135deg,#FFE0EE,#F2E4FF);border-top:1px solid rgba(200,120,180,.2);z-index:200;box-shadow:0 -4px 20px rgba(255,107,157,.12);padding-bottom:env(safe-area-inset-bottom);}
@@ -1197,50 +1197,73 @@ function renderNewsGrid(){
     </div>`;
   }).join('');
 }
+// Build an explanatory fallback draft — no API key needed
 function generateNewsDraft(a){
   if(a.draft) return a.draft;
   const tags=TEMPLATE_HASHTAGS[a.tag]||'#MedicalResearch #ClinicalMedicine';
+
+  // Use fullText when available (richer); fall back to summary
+  const content=(a.fullText||a.summary||'').trim();
   const summary=(a.summary||'').trim();
 
-  // Try to extract the first meaningful sentence from the summary as the lead
-  const firstSentence=(summary.match(/^[^.!?]{30,}[.!?]/)||[''])[0].trim();
-  const remainder=firstSentence&&summary.length>firstSentence.length
-    ?summary.slice(firstSentence.length).trim().slice(0,180):'';
+  // Sentences from content, filtering out very short or boilerplate ones
+  const sentences=(content.match(/[^.!?]{20,}[.!?]/g)||[]).map(s=>s.trim());
+  // Skip opening quotes or bylines ("Smith said..." / "NEW YORK —")
+  const usable=sentences.filter(s=>!/^["""'']/.test(s)&&!/^[A-Z]{2,}\s*[—–]/.test(s)&&s.length>40);
 
-  // If a number/stat appears in title or summary, surface it in the hook
-  const numMatch=(a.title+' '+summary).match(/(\d[\d,.]*\s*(?:%|percent|million|billion|thousand|fold))/i);
+  // The title is our most reliable source of WHAT this piece is about — use it to frame the post
+  const cleanTitle=a.title.replace(/\s*[-|]\s*(STAT News|WHO|Medscape|Cochrane|Medline|Reuters|NPR|BBC|AP)[^]*/i,'').trim();
 
-  let hook;
-  if(numMatch&&firstSentence){
-    // Lead with the stat directly, let the sentence follow as context
-    hook=firstSentence;
-  } else if(firstSentence){
-    hook=firstSentence;
-  } else {
-    // Summary too thin — use a category-specific opener from the pool
-    hook=pick(NEWS_OPENER_POOLS[a.tag]||NEWS_OPENER_POOLS['General Medicine'],a.title);
-  }
+  // Opening: what is this article actually about?
+  // Frame it as "I read something and here is what it covers"
+  const frameOpeners=[
+    `Something I read from ${a.site} this week that's worth knowing about.`,
+    `A piece from ${a.site} that caught my attention:`,
+    `This came up from ${a.site} and I think it's worth sharing.`,
+    `Reading through ${a.site} today — this one stood out.`,
+  ];
+  const frame=pick(frameOpeners, a.title+a.site);
 
+  // Core content: pull the 2-3 most substantive sentences
+  const core=usable.slice(0,3).join(' ').slice(0,350).trim();
+
+  // Closing observation from pool
   const closing=pick(NEWS_CLOSING_POOLS[a.tag]||NEWS_CLOSING_POOLS['General Medicine'],a.title+a.site);
 
-  const parts=[hook];
-  if(remainder&&remainder.length>40) parts.push(remainder);
+  const parts=[`${frame}\n\n${cleanTitle}.`];
+  if(core) parts.push(core);
   parts.push(closing);
   parts.push(`📖 ${a.site}\n${a.sourceUrl}`);
   parts.push(tags);
   return parts.join('\n\n');
 }
-function draftNewsPost(idx){
+
+async function draftNewsPost(idx){
   const a=ARTICLES[idx];
-  document.getElementById('news-draft-text').value=generateNewsDraft(a);
+  const da=document.getElementById('news-draft-area');
+  const ta=document.getElementById('news-draft-text');
+
+  // Show panel immediately with loading state
   document.getElementById('news-draft-source').innerHTML=`Source: <a href="${a.sourceUrl}" target="_blank" rel="noopener">${esc(a.site)}</a>`;
   const img=CAT_IMAGES[a.tag]||a.img;
-  document.getElementById('news-draft-img').src=img;
-  document.getElementById('news-draft-img-link').href=img;
-  document.getElementById('news-img-wrap').style.display='block';
-  const da=document.getElementById('news-draft-area');
+  if(img){document.getElementById('news-draft-img').src=img;document.getElementById('news-draft-img-link').href=img;document.getElementById('news-img-wrap').style.display='block';}
   da.style.display='block';
   setTimeout(()=>da.scrollIntoView({behavior:'smooth',block:'nearest'}),50);
+
+  // Try Claude API first if key is set
+  if(getApiKey()){
+    ta.value='Generating draft…';ta.disabled=true;
+    const content=a.fullText||a.summary||'';
+    const sys=`You are helping Dr. Sari, an Ethiopian medical researcher and physician, write a LinkedIn post about an article she just read. She paraphrases in her own voice — first person, specific, human. Not corporate. Not AI-sounding. No "paradigm shift", no "it is clear that", no "I encourage every clinician". She explains what the article is actually about and why it matters clinically, as if telling a colleague. 150–220 words. End with 3–4 relevant hashtags. Do NOT open with the article title verbatim.`;
+    const user=`Article title: ${a.title}\nSource: ${a.site}\n\nContent:\n${content||'(only title available)'}`;
+    try{
+      const result=await callClaude(sys,user);
+      ta.value=result;ta.disabled=false;return;
+    }catch(e){showToast('AI draft failed, using template.');}
+    ta.disabled=false;
+  }
+
+  ta.value=generateNewsDraft(a);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1283,7 +1306,7 @@ function renderJournalList(){
     </div>`;
   }).join('');
 }
-function draftJournalPost(idx){
+async function draftJournalPost(idx){
   const j=JOURNALS[idx];
   const tag1='#'+j.cat.replace(/[\s&'/]+/g,'');
   const articleUrl=j.pmid?`https://pubmed.ncbi.nlm.nih.gov/${j.pmid}/`:`https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(j.title+' '+j.author.split(',')[0])}`;
@@ -1333,16 +1356,29 @@ ${articleUrl}
 
 #MedicalResearch ${tag1} #ClinicalMedicine`;
 
-  document.getElementById('journal-draft-text').value=draft;
-  document.getElementById('journal-draft-source').innerHTML=
-    `<a href="${j.jUrl}" target="_blank" rel="noopener">${esc(j.journal)}</a> &bull; ${j.year} &bull; <a href="${articleUrl}" target="_blank" rel="noopener">${j.pmid?'View on PubMed →':'Find on PubMed →'}</a>`;
+  const sourceHtml=`<a href="${j.jUrl}" target="_blank" rel="noopener">${esc(j.journal)}</a> &bull; ${j.year} &bull; <a href="${articleUrl}" target="_blank" rel="noopener">${j.pmid?'View on PubMed →':'Find on PubMed →'}</a>`;
+  document.getElementById('journal-draft-source').innerHTML=sourceHtml;
   const imgUrl=CAT_IMAGES[j.cat]||CAT_IMAGES['General Medicine'];
   document.getElementById('journal-draft-img').src=imgUrl;
   document.getElementById('journal-draft-img-link').href=imgUrl;
   document.getElementById('journal-img-wrap').style.display='block';
   const da=document.getElementById('journal-draft-area');
+  const ta=document.getElementById('journal-draft-text');
   da.style.display='block';
   setTimeout(()=>da.scrollIntoView({behavior:'smooth',block:'nearest'}),50);
+
+  // Try Claude API if key is set
+  if(getApiKey()){
+    ta.value='Generating draft…';ta.disabled=true;
+    const sys=`You are helping Dr. Sari, an Ethiopian medical researcher and physician, write a LinkedIn post about a journal article. She explains what the paper is actually about and why it matters clinically — in her own voice, first person, thoughtful, specific. Not corporate. Not AI-sounding. 150–200 words. End with 3–4 relevant hashtags. Do NOT open with the paper title verbatim. Do NOT say "paradigm shift", "it is clear that", or "I encourage every clinician".`;
+    const user=`Paper: "${j.title}"\nAuthors: ${j.author}\nJournal: ${j.journal}, ${j.year}\nCategory: ${j.cat}`;
+    try{
+      const result=await callClaude(sys,user);
+      ta.value=result;ta.disabled=false;return;
+    }catch(e){showToast('AI draft failed, using template.');}
+    ta.disabled=false;
+  }
+  ta.value=draft;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
