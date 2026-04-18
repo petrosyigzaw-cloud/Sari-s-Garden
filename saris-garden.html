@@ -1220,7 +1220,7 @@ function cleanContent(text){
 }
 const CLIENT_PROMO_RE=/sign up|subscribe|newsletter|stay on top|click here|read more|want to stay|in your inbox|biotech today|our coverage|to get our|follow us|advertising|sponsored/i;
 function filterPromo(text){
-  return(text||'').split(/(?<=[.!?])\s+/).filter(s=>!CLIENT_PROMO_RE.test(s)).join(' ').trim();
+  return(text||'').replace(/([.!?])\s+/g,'$1\n').split('\n').filter(s=>!CLIENT_PROMO_RE.test(s)).join(' ').trim();
 }
 
 // Build a topic-aware fallback draft — no API key needed
