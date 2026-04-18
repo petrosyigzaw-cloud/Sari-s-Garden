@@ -1197,6 +1197,18 @@ function renderNewsGrid(){
     </div>`;
   }).join('');
 }
+// Strip source/newsletter prefixes from RSS titles (e.g. "STAT+: Pharmalittle: ...")
+const SOURCE_PREFIX_RE=/^(STAT\+?|Pharmalittle|WHO|EPHI|Medscape|Cochrane|Africa\s*CDC|Reuters|NPR|BBC|AP\s*News?|MedPage\s*Today|UpToDate|AJOL)\s*:\s*/i;
+function cleanArticleTitle(title){
+  let t=(title||'').trim();
+  let prev;
+  // Repeatedly strip known source prefixes from the front
+  do{prev=t;t=t.replace(SOURCE_PREFIX_RE,'').trim();}while(t!==prev&&t.length>10);
+  // Also strip trailing " - Source" or "| Source"
+  t=t.replace(/\s*[-|]\s*(STAT|WHO|Medscape|Cochrane|Reuters|NPR|BBC|AP|EPHI)[^\n]*/i,'').trim();
+  return(t&&t.length>8)?t:title;
+}
+
 // Build an explanatory fallback draft — no API key needed
 function generateNewsDraft(a){
   if(a.draft) return a.draft;
@@ -1204,15 +1216,13 @@ function generateNewsDraft(a){
 
   // Use fullText when available (richer); fall back to summary
   const content=(a.fullText||a.summary||'').trim();
-  const summary=(a.summary||'').trim();
 
   // Sentences from content, filtering out very short or boilerplate ones
   const sentences=(content.match(/[^.!?]{20,}[.!?]/g)||[]).map(s=>s.trim());
   // Skip opening quotes or bylines ("Smith said..." / "NEW YORK —")
   const usable=sentences.filter(s=>!/^["""'']/.test(s)&&!/^[A-Z]{2,}\s*[—–]/.test(s)&&s.length>40);
 
-  // The title is our most reliable source of WHAT this piece is about — use it to frame the post
-  const cleanTitle=a.title.replace(/\s*[-|]\s*(STAT News|WHO|Medscape|Cochrane|Medline|Reuters|NPR|BBC|AP)[^]*/i,'').trim();
+  const cleanTitle=cleanArticleTitle(a.title);
 
   // Opening: what is this article actually about?
   // Frame it as "I read something and here is what it covers"
@@ -1254,8 +1264,8 @@ async function draftNewsPost(idx){
   if(getApiKey()){
     ta.value='Generating draft…';ta.disabled=true;
     const content=a.fullText||a.summary||'';
-    const sys=`You are helping Dr. Sari, an Ethiopian medical researcher and physician, write a LinkedIn post about an article she just read. She paraphrases in her own voice — first person, specific, human. Not corporate. Not AI-sounding. No "paradigm shift", no "it is clear that", no "I encourage every clinician". She explains what the article is actually about and why it matters clinically, as if telling a colleague. 150–220 words. End with 3–4 relevant hashtags. Do NOT open with the article title verbatim.`;
-    const user=`Article title: ${a.title}\nSource: ${a.site}\n\nContent:\n${content||'(only title available)'}`;
+    const sys=`You are helping Dr. Sari, an Ethiopian medical researcher and physician, write a LinkedIn post about an article she just read. She paraphrases in her own voice — first person, specific, human. Not corporate. Not AI-sounding. No "paradigm shift", no "it is clear that", no "I encourage every clinician". She explains what the article is actually about and why it matters clinically, as if telling a colleague. 150–220 words. End with 3–4 relevant hashtags. Do NOT open with the article title verbatim. Do NOT mention the source name at the top — the source is cited at the bottom.`;
+    const user=`Article title: ${cleanArticleTitle(a.title)}\nSource: ${a.site}\n\nContent:\n${content||'(only title available)'}`;
     try{
       const result=await callClaude(sys,user);
       ta.value=result;ta.disabled=false;return;
