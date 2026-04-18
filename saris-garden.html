@@ -834,18 +834,169 @@ const CAT_IMAGES = {
   'Ethiopian Health':        'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?w=1200&q=80&fit=crop',
 };
 
-const CAT_OPENERS = {
-  'Nutrition':          'Nutrition science keeps producing findings that should probably be getting more airtime in clinical settings.',
-  'Oncology':           'Something worth reading from oncology this week.',
-  'Cardiology':         'Cardiology continues to generate practice-changing data — this one caught my attention.',
-  'General Medicine':   'Filed this one as worth sharing for anyone who missed it.',
-  'Public Health':      'Public health data that I think clinicians need to sit with, not just policymakers.',
-  'Infectious Disease': 'Infectious disease is where the gap between evidence and practice can be most costly.',
-  'Neurology':          'Neurology is having a genuinely interesting few years. This adds to that.',
-  'Endocrinology':      'Metabolic medicine is moving faster than most people realise.',
-  "Women's Health":     "Women's health research has historically been underpowered. Papers like this are changing that.",
-  'Tropical & Global Health':'Global health data tends to get less attention than it deserves outside the journals it appears in.',
-  'Ethiopian Medicine': 'Ethiopian and regional medical research is producing work that deserves a wider audience.',
+// Deterministic pick — same article always gets the same variant, different articles vary
+function strHash(s){let h=0;for(let i=0;i<s.length;i++)h=(Math.imul(31,h)+s.charCodeAt(i))|0;return Math.abs(h);}
+function pick(arr,seed){return arr[strHash(seed)%arr.length];}
+
+// Per-category opener pools for JOURNAL drafts
+const JOURNAL_OPENER_POOLS = {
+  'Nutrition': [
+    'The evidence around diet and clinical outcomes keeps strengthening — this paper adds to it.',
+    'Nutrition research is more rigorous than it sometimes gets credit for in clinical settings.',
+    'The nutrition-disease connection in this paper is the kind of thing that should be in more clinical conversations.',
+    'This is the kind of nutrition data that shifts how I think about patient counselling.',
+  ],
+  'Oncology': [
+    'Oncology keeps moving. This piece reflects where the field is heading.',
+    'A paper from oncology that\'s been sitting with me.',
+    'The gap between what oncology can now offer and what most patients can access is real — this study sits inside that tension.',
+    'Treatment options in oncology have changed significantly. This adds to that picture.',
+  ],
+  'Cardiology': [
+    'The cardiovascular evidence base is one of the strongest in medicine. This adds to it.',
+    'Cardiology trial data that reshapes how I think about risk management.',
+    'A cardiovascular paper worth knowing — especially if you manage these patients in any context.',
+    'The cardiology literature moves fast. This one is worth slowing down for.',
+  ],
+  'General Medicine': [
+    'Something from the general medicine literature that belongs in more conversations.',
+    'A paper that touches questions I encounter in practice regularly.',
+    'This one crosses specialties in a way that makes it worth sharing broadly.',
+    'Filed under: things clinicians across disciplines should probably know.',
+  ],
+  'Public Health': [
+    'Public health data that clinicians need to know — not just policymakers.',
+    'The numbers in public health often tell a story individual clinical encounters can\'t.',
+    'Population-level data with direct clinical implications.',
+    'This is the kind of evidence that should be driving resource allocation decisions.',
+  ],
+  'Infectious Disease': [
+    'Infectious disease is where the gap between evidence and practice costs the most.',
+    'Antimicrobial stewardship is everyone\'s problem. Data like this makes that concrete.',
+    'An infectious disease paper with direct implications for how we prescribe.',
+    'The epidemiology in this study reflects what I\'m seeing clinically.',
+  ],
+  'Neurology': [
+    'Neurology has been a particularly active field. This adds meaningfully to it.',
+    'A neurological finding worth knowing — the clinical implications are real.',
+    'Neurodegenerative disease research is moving faster than it sometimes appears.',
+    'Something from the neurology literature that\'s changed how I frame the conversation with patients.',
+  ],
+  'Endocrinology': [
+    'Metabolic medicine is evolving quickly. This piece reflects where it\'s heading.',
+    'The evidence around metabolic disease management keeps building.',
+    'An endocrinology paper that deserves more attention outside the specialty.',
+    'Diabetes and obesity medicine have been transformed by recent trial data. This contributes to that.',
+  ],
+  "Women's Health": [
+    "Women's health research has historically been underpowered. That's starting to shift.",
+    'A paper from women\'s health that addresses a gap that\'s been there too long.',
+    'Maternal and reproductive health data that should be informing clinical decisions.',
+    "The evidence base for women's health is finally catching up. This is part of that.",
+  ],
+  'Tropical & Global Health': [
+    'Global health data tends to receive less attention than its scale warrants.',
+    'A global health finding that deserves a wider clinical audience.',
+    'The disease burden this paper describes is real, and the solutions are within reach.',
+    'What happens in global health matters everywhere. This is a useful reminder.',
+  ],
+  'Ethiopian Medicine': [
+    'Ethiopian medical research is producing work that deserves a wider readership.',
+    'Regional data matters — what\'s published from Ethiopia reflects what\'s actually happening on the ground.',
+    'A paper from the Ethiopian medical literature that\'s worth knowing about.',
+    'Local evidence is the most actionable evidence. This is a good example.',
+  ],
+};
+
+// Per-category closing pools for JOURNAL drafts
+const JOURNAL_CLOSING_POOLS = {
+  'Nutrition': [
+    'Worth reading if you counsel patients on diet, prevention, or lifestyle.',
+    'Diet rarely gets the same evidence-based framing as pharmacology. Papers like this help.',
+    'The nutrition-clinical outcome conversation is long overdue in more departments.',
+  ],
+  'Oncology': [
+    'Worth reading if you work in or around oncology — the implementation questions are as important as the findings.',
+    'Access and equity in cancer care remain the harder conversation alongside the science.',
+    'The distance between what trials show and what patients receive is still real.',
+  ],
+  'Cardiology': [
+    'Worth knowing if you manage cardiovascular risk at any point in care.',
+    'If you see these patients — even peripherally — this is relevant.',
+    'The guidelines will catch up. Better to know the evidence before they do.',
+  ],
+  'General Medicine': [
+    'Worth reading regardless of specialty — the clinical implications cross disciplines.',
+    'This belongs in primary care conversations as much as specialist ones.',
+    'If you see patients with complex or chronic conditions, this applies.',
+  ],
+  'Public Health': [
+    'Individual clinical decisions sit inside this population-level picture.',
+    'Worth understanding if you want to advocate effectively for your patient population.',
+    'The clinical and policy implications run in parallel here.',
+  ],
+  'Infectious Disease': [
+    'Every prescribing decision is a stewardship decision. This is a useful reminder.',
+    'Worth sharing with anyone who prescribes antimicrobials.',
+    'The prevention angle here has practical implications for both inpatient and outpatient settings.',
+  ],
+  'Neurology': [
+    'Still a lot of open questions, but this moves the conversation forward.',
+    'Worth knowing if you manage or refer patients with neurological conditions.',
+    'The treatment landscape is evolving — this paper reflects where things are heading.',
+  ],
+  'Endocrinology': [
+    'Worth reading if you manage diabetes, obesity, or metabolic disease in any clinical context.',
+    'The cardiometabolic overlap makes this relevant well beyond endocrinology.',
+    'If you counsel patients on weight, glucose, or metabolic risk, this applies.',
+  ],
+  "Women's Health": [
+    'Worth reading if you provide care to women across any point in the lifespan.',
+    'The sex and gender gap in clinical research is real. Papers like this help close it.',
+    'Reproductive and maternal health data like this should be informing practice more broadly.',
+  ],
+  'Tropical & Global Health': [
+    'Worth reading if you work in, collaborate with, or care about health in low-resource settings.',
+    'The implementation challenges are as important as the findings themselves.',
+    'Regional disease data like this rarely makes it into standard curricula — that\'s a gap worth closing.',
+  ],
+  'Ethiopian Medicine': [
+    'Worth knowing if you practice in or collaborate with health systems in Ethiopia or the region.',
+    'Ethiopian health data should inform Ethiopian health decisions. Sharing it matters.',
+    'Regional evidence is underused in clinical decision-making. This is part of fixing that.',
+  ],
+};
+
+// Per-category opener pools for NEWS drafts (used as fallback if summary is thin)
+const NEWS_OPENER_POOLS = {
+  'Oncology':               ['Oncology data worth pausing on:','A piece from oncology that landed for me:','Something in the cancer space worth knowing:','This oncology update caught my attention:'],
+  'Cardiology':             ['A cardiovascular finding worth knowing:','Something in cardiology worth slowing down for:','Cardiology evidence that belongs in more clinical conversations:','A cardiac data point I keep thinking about:'],
+  'Nutrition':              ['Nutrition research that should be getting more clinical airtime:','A nutrition finding worth knowing:','Something from nutrition science worth sharing:','This dietary research is worth knowing about:'],
+  'Infectious Disease':     ['Infectious disease data that has direct clinical implications:','Something in the ID space worth knowing:','A finding in antimicrobials or infection that matters:','Infectious disease evidence worth staying current on:'],
+  'Neurology':              ['A neurological finding worth knowing:','Something from neurology worth sharing:','Neurology data that landed for me:','A neuroscience update worth knowing:'],
+  'Endocrinology':          ['Metabolic medicine data worth knowing:','A finding in diabetes or obesity medicine worth sharing:','Something from endocrinology that caught my attention:','Metabolic disease evidence worth staying current on:'],
+  "Women's Health":         ["Women's health research that deserves more attention:",'A maternal or reproductive health finding worth knowing:','Something from women\'s health worth sharing:',"Women's health data that should be informing practice:"],
+  'Public Health':          ['Public health data worth knowing — clinically and otherwise:','A population-level finding with direct clinical implications:','Something from public health worth sharing broadly:','Public health evidence that belongs in clinical conversations:'],
+  'Tropical & Global Health':['Global health data that deserves more attention:','A finding in tropical or global health worth knowing:','Something from global health that matters closer to home too:','A global disease burden finding worth knowing:'],
+  'Ethiopian Medicine':     ['Something from the Ethiopian health landscape worth sharing:','Ethiopian medical research worth knowing about:','A finding from Ethiopia worth a wider readership:','Regional health data from Ethiopia worth sharing:'],
+  'General Medicine':       ['A clinical finding worth knowing:','Something in medicine worth sharing:','A piece from the literature that caught my attention:','Clinical data worth staying current on:'],
+  'Medical Technology':     ['Something in health tech worth paying attention to:','AI and medicine — the honest version of this story:','Digital health data worth knowing about:','A health technology finding worth knowing:'],
+};
+
+// Per-category closings for NEWS drafts (brief — 1 sentence)
+const NEWS_CLOSING_POOLS = {
+  'Oncology':               ['The implementation gap between what trials show and what patients receive is still real.','Worth following if you work in or around oncology.','Access and equity in cancer care remain the harder conversation.'],
+  'Cardiology':             ['Worth knowing regardless of specialty — the cardiovascular overlap is broad.','The evidence base in cardiovascular medicine keeps strengthening.','This is the kind of data that changes how I counsel patients on risk.'],
+  'Nutrition':              ['Diet rarely gets the same evidence-based framing as pharmacology. Worth changing that.','Worth reading if you counsel patients on lifestyle or prevention.','The nutrition-outcome connection is clearer than it sometimes appears in clinical settings.'],
+  'Infectious Disease':     ['Every prescription is a stewardship decision. Data like this is a useful reminder.','Worth sharing with anyone who prescribes antimicrobials.','The gap between evidence and prescribing practice in this area is still real.'],
+  'Neurology':              ['The treatment landscape in neurology is evolving quickly.','Worth knowing if you manage or refer patients with neurological conditions.','Still open questions, but this moves the field forward.'],
+  'Endocrinology':          ['The cardiometabolic overlap makes this relevant well beyond endocrinology.','Worth reading if you manage metabolic disease in any clinical context.','Metabolic medicine has been transformed by recent data. This is part of that.'],
+  "Women's Health":         ["The sex and gender gap in clinical research is real. Coverage like this helps.",'Worth reading if you provide care to women at any point in the lifespan.','Reproductive and maternal health evidence should be informing clinical practice more broadly.'],
+  'Public Health':          ['Individual clinical decisions sit inside this population-level picture.','Worth understanding if you want to advocate effectively for your patients.','The clinical and policy implications run in parallel here.'],
+  'Tropical & Global Health':['The implementation challenges are as important as the findings themselves.','Regional disease data like this rarely gets the clinical attention it deserves.','What happens in global health matters everywhere.'],
+  'Ethiopian Medicine':     ['Local evidence is the most actionable evidence.','Ethiopian health data should be informing Ethiopian health decisions.','Regional research like this deserves a wider audience.'],
+  'General Medicine':       ['Worth reading regardless of specialty.','This applies across disciplines more than it might initially appear.','Filed under: things clinicians should probably know.'],
+  'Medical Technology':     ['The gap between benchmark performance and real-world deployment is still real.','The regulatory and liability frameworks are still catching up.','Worth following if you think about how technology integrates into clinical workflows.'],
 };
 
 const IDEA_ACCENTS = [
@@ -961,9 +1112,36 @@ function renderNewsGrid(){
 }
 function generateNewsDraft(a){
   if(a.draft) return a.draft;
-  const hook=TEMPLATE_HOOKS[a.tag]||'Came across this and thought it was worth sharing.';
   const tags=TEMPLATE_HASHTAGS[a.tag]||'#MedicalResearch #ClinicalMedicine';
-  return`${hook}\n\n${a.title}${a.summary?'\n\n'+a.summary:''}\n\n📖 ${a.site}\n${a.sourceUrl}\n\n${tags}`;
+  const summary=(a.summary||'').trim();
+
+  // Try to extract the first meaningful sentence from the summary as the lead
+  const firstSentence=(summary.match(/^[^.!?]{30,}[.!?]/)||[''])[0].trim();
+  const remainder=firstSentence&&summary.length>firstSentence.length
+    ?summary.slice(firstSentence.length).trim().slice(0,180):'';
+
+  // If a number/stat appears in title or summary, surface it in the hook
+  const numMatch=(a.title+' '+summary).match(/(\d[\d,.]*\s*(?:%|percent|million|billion|thousand|fold))/i);
+
+  let hook;
+  if(numMatch&&firstSentence){
+    // Lead with the stat directly, let the sentence follow as context
+    hook=firstSentence;
+  } else if(firstSentence){
+    hook=firstSentence;
+  } else {
+    // Summary too thin — use a category-specific opener from the pool
+    hook=pick(NEWS_OPENER_POOLS[a.tag]||NEWS_OPENER_POOLS['General Medicine'],a.title);
+  }
+
+  const closing=pick(NEWS_CLOSING_POOLS[a.tag]||NEWS_CLOSING_POOLS['General Medicine'],a.title+a.site);
+
+  const parts=[hook];
+  if(remainder&&remainder.length>40) parts.push(remainder);
+  parts.push(closing);
+  parts.push(`📖 ${a.site}\n${a.sourceUrl}`);
+  parts.push(tags);
+  return parts.join('\n\n');
 }
 function draftNewsPost(idx){
   const a=ARTICLES[idx];
@@ -1020,15 +1198,48 @@ function renderJournalList(){
 }
 function draftJournalPost(idx){
   const j=JOURNALS[idx];
-  const opener=CAT_OPENERS[j.cat]||'Came across this and thought it was worth sharing.';
   const tag1='#'+j.cat.replace(/[\s&'/]+/g,'');
   const articleUrl=j.pmid?`https://pubmed.ncbi.nlm.nih.gov/${j.pmid}/`:`https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(j.title+' '+j.author.split(',')[0])}`;
+
+  // Parse title for study design signals to get a more specific opener
+  const tl=j.title.toLowerCase();
+  let opener;
+  if(/systematic review|meta.analysis/.test(tl)){
+    opener=pick([
+      'When the systematic reviews align, it usually means the evidence has settled enough to act on.',
+      'Meta-analyses take time to produce. This one consolidates data worth knowing.',
+      'Systematic reviews are where the noise of individual studies tends to settle out.',
+    ],j.title);
+  } else if(/randomized|randomised|\brct\b|phase [23]/.test(tl)){
+    opener=pick([
+      'Randomized trial data — the design matters here.',
+      'RCT data on this is something the field needed.',
+      'Trial data, not observational. Worth knowing.',
+    ],j.title);
+  } else if(/guideline|recommendation|consensus/.test(tl)){
+    opener=pick([
+      'Guidelines shape practice more than individual papers. These are worth reviewing.',
+      'When guidance updates, it usually means the evidence has shifted enough to act on.',
+      'Updated recommendations in this area — worth knowing before the guidelines filter down.',
+    ],j.title);
+  } else if(/cohort|prospective|population/.test(tl)){
+    opener=pick([
+      'Cohort data on this is useful — it reflects what actually happens in clinical populations.',
+      'A prospective study worth knowing about.',
+      'Real-world cohort data tends to be more honest than trial populations. This is worth reading.',
+    ],j.title);
+  } else {
+    opener=pick(JOURNAL_OPENER_POOLS[j.cat]||JOURNAL_OPENER_POOLS['General Medicine'],j.title);
+  }
+
+  const closing=pick(JOURNAL_CLOSING_POOLS[j.cat]||JOURNAL_CLOSING_POOLS['General Medicine'],j.title+j.journal);
+
   const draft=`${opener}
 
 "${j.title}"
 ${j.author} — ${j.journal}, ${j.year}
 
-Worth reading in full if this falls in your area. The methodology is solid and the clinical implications are worth thinking through.
+${closing}
 
 📖 ${j.journal}
 ${articleUrl}
