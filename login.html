@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sari's Garden — Sign In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box;}
+:root{
+  --pink:#FF6B9D;--purple:#7C4DFF;--dark:#0D0D1F;
+  --grad:linear-gradient(135deg,#FF6B9D 0%,#7C4DFF 100%);
+  --surface:#ffffff;--bg:#F7F5FF;--text:#1A1033;--muted:#8B8FA8;--border:#EEE9F8;
+}
+body{font-family:'DM Sans',system-ui,sans-serif;background:var(--dark);min-height:100vh;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;}
+
+/* background orbs */
+.orb{position:absolute;border-radius:50%;filter:blur(80px);pointer-events:none;}
+.orb-1{width:500px;height:500px;background:rgba(124,77,255,.18);top:-100px;right:-100px;}
+.orb-2{width:400px;height:400px;background:rgba(255,107,157,.14);bottom:-80px;left:-80px;}
+.orb-3{width:300px;height:300px;background:rgba(76,201,240,.10);top:50%;left:50%;transform:translate(-50%,-50%);}
+
+.card{
+  position:relative;z-index:1;
+  background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.10);
+  backdrop-filter:blur(20px);
+  border-radius:24px;
+  padding:44px 40px 40px;
+  width:100%;max-width:400px;
+  box-shadow:0 32px 80px rgba(0,0,0,.4);
+}
+
+.brand{text-align:center;margin-bottom:36px;}
+.brand-icon{width:56px;height:56px;background:var(--grad);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;font-size:26px;margin-bottom:16px;box-shadow:0 8px 24px rgba(255,107,157,.4);}
+.brand-title{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:#fff;letter-spacing:-.3px;}
+.brand-sub{font-size:12.5px;color:rgba(255,255,255,.38);margin-top:4px;}
+
+.field{margin-bottom:18px;}
+.field label{display:block;font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:rgba(255,255,255,.35);margin-bottom:8px;}
+.field input{
+  width:100%;padding:13px 16px;
+  background:rgba(255,255,255,.07);
+  border:1.5px solid rgba(255,255,255,.10);
+  border-radius:12px;
+  font-family:'DM Sans',sans-serif;font-size:14px;color:#fff;
+  outline:none;transition:border-color .18s,background .18s;
+}
+.field input::placeholder{color:rgba(255,255,255,.25);}
+.field input:focus{border-color:var(--pink);background:rgba(255,255,255,.10);}
+
+.btn-login{
+  width:100%;padding:14px;margin-top:8px;
+  background:var(--grad);color:#fff;
+  border:none;border-radius:12px;
+  font-family:'Syne',sans-serif;font-size:15px;font-weight:700;
+  cursor:pointer;transition:all .18s;
+  box-shadow:0 6px 20px rgba(255,107,157,.35);
+}
+.btn-login:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(255,107,157,.45);}
+.btn-login:active{transform:translateY(0);}
+.btn-login:disabled{opacity:.6;cursor:not-allowed;transform:none;}
+
+.error-msg{
+  background:rgba(255,107,107,.12);
+  border:1px solid rgba(255,107,107,.25);
+  border-radius:10px;padding:12px 14px;
+  font-size:13px;color:#ff8a8a;
+  margin-top:16px;display:none;text-align:center;
+}
+.footer-note{text-align:center;font-size:11.5px;color:rgba(255,255,255,.2);margin-top:24px;}
+</style>
+</head>
+<body>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+<div class="card">
+  <div class="brand">
+    <div class="brand-icon">🌷</div>
+    <div class="brand-title">Sari's Garden</div>
+    <div class="brand-sub">Medical Research Platform</div>
+  </div>
+
+  <form id="login-form" onsubmit="doLogin(event)">
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="password" placeholder="Enter your password" autocomplete="current-password" autofocus>
+    </div>
+    <button type="submit" class="btn-login" id="login-btn">Sign In</button>
+  </form>
+
+  <div class="error-msg" id="error-msg"></div>
+  <div class="footer-note">Only Sari can access this platform.</div>
+</div>
+
+<script>
+async function doLogin(e) {
+  e.preventDefault();
+  const password = document.getElementById('password').value;
+  const btn = document.getElementById('login-btn');
+  const err = document.getElementById('error-msg');
+
+  if (!password) return;
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  err.style.display = 'none';
+
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await res.json();
+
+    if (data.ok) {
+      window.location.href = '/';
+    } else {
+      err.textContent = data.error || 'Incorrect password.';
+      err.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+      document.getElementById('password').value = '';
+      document.getElementById('password').focus();
+    }
+  } catch {
+    err.textContent = 'Connection error. Please try again.';
+    err.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+}
+</script>
+</body>
+</html>

@@ -1,15 +1,122 @@
 'use strict';
-const express   = require('express');
-const Parser    = require('rss-parser');
-const path      = require('path');
+const express      = require('express');
+const Parser       = require('rss-parser');
+const bcrypt       = require('bcryptjs');
+const cookieParser = require('cookie-parser');
+const crypto       = require('crypto');
+const path         = require('path');
+const fs           = require('fs');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(cookieParser());
+app.use(express.json());
+
 // Optional PubMed API key (env var) — raises rate limit from 3 to 10 req/sec
-const PM_KEY = process.env.PUBMED_API_KEY ? `&api_key=${process.env.PUBMED_API_KEY}` : '';
+const PM_KEY  = process.env.PUBMED_API_KEY ? `&api_key=${process.env.PUBMED_API_KEY}` : '';
 const PM_BASE = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/';
-const HEADERS  = { 'User-Agent': 'SarisGarden/1.0 (medical research platform; contact: admin)' };
+const HEADERS = { 'User-Agent': 'SarisGarden/1.0 (medical research platform)' };
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+const AUTH_FILE = path.join(__dirname, 'data', 'auth.json');
+const sessions  = new Map(); // token → { expires }
+
+function getPasswordHash() {
+  if (fs.existsSync(AUTH_FILE)) {
+    try { return JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8')).hash; } catch {}
+  }
+  // Fall back to env var (set in Render dashboard for first-time or post-redeploy)
+  return process.env.SARI_PASSWORD_HASH || null;
+}
+
+function savePasswordHash(hash) {
+  fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
+  fs.writeFileSync(AUTH_FILE, JSON.stringify({ hash }), 'utf8');
+}
+
+function requireAuth(req, res, next) {
+  const token = req.cookies?.sg_session;
+  if (token && sessions.has(token)) {
+    const s = sessions.get(token);
+    if (s.expires > Date.now()) return next();
+    sessions.delete(token);
+  }
+  // API routes → 401 JSON, page routes → redirect
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not authenticated' });
+  res.redirect('/login');
+}
+
+// ─── Auth routes ──────────────────────────────────────────────────────────────
+app.get('/login', (_, res) => res.sendFile(path.join(__dirname, 'login.html')));
+
+app.post('/auth/login', async (req, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ error: 'Password required.' });
+
+  const hash = getPasswordHash();
+  if (!hash) {
+    return res.status(500).json({ error: 'No password configured. Ask the admin to set SARI_PASSWORD_HASH in Render.' });
+  }
+
+  const valid = await bcrypt.compare(password, hash);
+  if (!valid) return res.status(401).json({ error: 'Incorrect password.' });
+
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, { expires: Date.now() + 7 * 24 * 60 * 60 * 1000 }); // 7 days
+
+  res.cookie('sg_session', token, {
+    httpOnly: true,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production'
+  });
+  res.json({ ok: true });
+});
+
+app.post('/auth/change-password', requireAuth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  }
+
+  const hash = getPasswordHash();
+  if (hash) {
+    const valid = await bcrypt.compare(currentPassword, hash);
+    if (!valid) return res.status(401).json({ error: 'Current password is incorrect.' });
+  }
+
+  const newHash = await bcrypt.hash(newPassword, 12);
+  savePasswordHash(newHash);
+
+  // Also log the hash so it can be set as SARI_PASSWORD_HASH env var if needed after a redeploy
+  console.log('[auth] Password changed. If redeployed, set this in Render env vars:');
+  console.log(`[auth] SARI_PASSWORD_HASH=${newHash}`);
+
+  res.json({ ok: true });
+});
+
+app.get('/auth/logout', (req, res) => {
+  const token = req.cookies?.sg_session;
+  if (token) sessions.delete(token);
+  res.clearCookie('sg_session');
+  res.redirect('/login');
+});
+
+// ─── Protected app & API routes ───────────────────────────────────────────────
+app.get('/',             requireAuth, (_, res) => res.sendFile(path.join(__dirname, 'saris-garden.html')));
+app.get('/api/news',     requireAuth, (_, res) => res.json(cache.news));
+app.get('/api/journals', requireAuth, (_, res) => res.json(cache.journals));
+app.get('/api/status',   requireAuth, (_, res) => res.json({
+  lastFetch:    cache.lastFetch,
+  lastFetchAgo: cache.lastFetch ? Math.round((Date.now() - cache.lastFetch) / 60000) + ' min ago' : null,
+  newsCount:    cache.news.length,
+  journalCount: cache.journals.length,
+}));
+
+// ─── In-memory cache ──────────────────────────────────────────────────────────
+let cache = { news: [], journals: [], lastFetch: null };
+const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 
 const rss = new Parser({
   headers: HEADERS,
@@ -17,34 +124,29 @@ const rss = new Parser({
   customFields: { item: [['media:content','mediaContent'],['media:thumbnail','mediaThumbnail']] }
 });
 
-// ─── In-memory cache ──────────────────────────────────────────────────────────
-let cache = { news: [], journals: [], lastFetch: null };
-const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
-
-// ─── Topic detection from article text ───────────────────────────────────────
+// ─── Topic detection ──────────────────────────────────────────────────────────
 function detectTag(text = '') {
   const t = text.toLowerCase();
   if (/cancer|oncol|tumor|tumour|chemotherapy|immunotherapy|car[-\s]?t|leukemia|lymphoma|carcinoma/.test(t)) return 'Oncology';
   if (/cardiac|cardio|heart failure|coronary|myocardial|atrial fibrillation|hypertension|sglt2|statin|arrhythmia/.test(t)) return 'Cardiology';
   if (/nutrition|diet\b|vitamin|mineral|supplement|obesity|bmi|metabolic syndrome|plant.based|malnutrition/.test(t)) return 'Nutrition';
-  if (/antimicrobial|antibiotic|resistance|sepsis|\bhiv\b|\btb\b|tuberculosis|malaria|\bcovid\b|influenza|mpox|cholera|ebola/.test(t)) return 'Infectious Disease';
+  if (/antimicrobial|antibiotic|resistance|sepsis|\bhiv\b|\btb\b|tuberculosis|malaria|\bcovid\b|influenza|mpox|cholera/.test(t)) return 'Infectious Disease';
   if (/alzheimer|parkinson|dementia|cognitive|seizure|epilepsy|multiple sclerosis|migraine|neurolog/.test(t)) return 'Neurology';
   if (/diabet|insulin|thyroid|endocrin|glucose|hba1c|glp.1|semaglutide|tirzepatide|adrenal/.test(t)) return 'Endocrinology';
-  if (/\bwomen\b|maternal|pregnancy|obstetric|gynecol|menopause|fertility|cervical|endometriosis|eclampsia/.test(t)) return "Women's Health";
-  if (/ethiopia|tropical medicine|neglected tropical|leishmaniasis|schistosomiasis|trypanosomiasis|filariasis/.test(t)) return 'Tropical & Global Health';
-  if (/public health|epidemi|surveillance|vaccination|immunization|mortality rate|morbidity|ncd|non-communicable/.test(t)) return 'Public Health';
+  if (/\bwomen\b|maternal|pregnancy|obstetric|gynecol|menopause|fertility|cervical|endometriosis/.test(t)) return "Women's Health";
+  if (/ethiopia|tropical medicine|neglected tropical|leishmaniasis|schistosomiasis/.test(t)) return 'Tropical & Global Health';
+  if (/public health|epidemi|surveillance|vaccination|immunization|ncd|non-communicable/.test(t)) return 'Public Health';
   return 'General Medicine';
 }
 
-// ─── RSS feed sources ─────────────────────────────────────────────────────────
+// ─── RSS sources ──────────────────────────────────────────────────────────────
 const RSS_SOURCES = [
-  { url: 'https://www.statnews.com/feed/',                              source: 'STAT News',       siteUrl: 'https://www.statnews.com',           max: 7 },
-  { url: 'https://www.who.int/rss-feeds/news-english.xml',             source: 'WHO',             siteUrl: 'https://www.who.int',                max: 5 },
-  { url: 'https://africacdc.org/feed/',                                 source: 'Africa CDC',      siteUrl: 'https://africacdc.org',              max: 4 },
-  { url: 'https://www.cochranelibrary.com/feed/cochrane-reviews-new',  source: 'Cochrane Library',siteUrl: 'https://www.cochranelibrary.com',     max: 4 },
-  { url: 'https://www.medscape.com/cx/rss/medpulse.xml',               source: 'Medscape',        siteUrl: 'https://www.medscape.com',           max: 5 },
-  { url: 'https://ephi.gov.et/feed/',                                   source: 'EPHI',            siteUrl: 'https://ephi.gov.et',                max: 3 },
-  { url: 'https://www.ajol.info/index.php/index/oai?verb=ListRecords&metadataPrefix=oai_dc&set=ajol_health', source: 'AJOL', siteUrl: 'https://www.ajol.info', max: 3 },
+  { url: 'https://www.statnews.com/feed/',                             source: 'STAT News',       siteUrl: 'https://www.statnews.com',          max: 7 },
+  { url: 'https://www.who.int/rss-feeds/news-english.xml',            source: 'WHO',             siteUrl: 'https://www.who.int',               max: 5 },
+  { url: 'https://africacdc.org/feed/',                                source: 'Africa CDC',      siteUrl: 'https://africacdc.org',             max: 4 },
+  { url: 'https://www.cochranelibrary.com/feed/cochrane-reviews-new', source: 'Cochrane Library',siteUrl: 'https://www.cochranelibrary.com',    max: 4 },
+  { url: 'https://www.medscape.com/cx/rss/medpulse.xml',              source: 'Medscape',        siteUrl: 'https://www.medscape.com',          max: 5 },
+  { url: 'https://ephi.gov.et/feed/',                                  source: 'EPHI',            siteUrl: 'https://ephi.gov.et',               max: 3 },
 ];
 
 async function fetchFeeds() {
@@ -58,10 +160,6 @@ async function fetchFeeds() {
       (feed.items || []).slice(0, src.max).forEach(item => {
         if (!item.title || !item.link) return;
         const text = (item.title || '') + ' ' + (item.contentSnippet || item.summary || '');
-        const imgUrl = item.enclosure?.url
-          || item.mediaContent?.$.url
-          || item.mediaThumbnail?.$.url
-          || null;
         articles.push({
           title:     item.title.trim(),
           site:      src.source,
@@ -69,11 +167,11 @@ async function fetchFeeds() {
           tag:       detectTag(text),
           summary:   item.contentSnippet ? item.contentSnippet.slice(0, 260).trim() : '',
           pubDate:   item.isoDate || item.pubDate || new Date().toISOString(),
-          img:       imgUrl,
-          draft:     null   // generated client-side from template
+          img:       item.enclosure?.url || item.mediaContent?.$.url || item.mediaThumbnail?.$.url || null,
+          draft:     null
         });
       });
-      console.log(`  ✓ ${src.source}: fetched`);
+      console.log(`  ✓ ${src.source}`);
     } catch (e) {
       console.warn(`  ✗ ${src.source}: ${e.message}`);
     }
@@ -81,13 +179,14 @@ async function fetchFeeds() {
   return articles;
 }
 
-// ─── PubMed helpers ───────────────────────────────────────────────────────────
+// ─── PubMed ───────────────────────────────────────────────────────────────────
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
 async function pmSearch(query, max = 5) {
   const url = `${PM_BASE}esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmax=${max}&sort=date&retmode=json${PM_KEY}`;
   const r = await fetch(url, { headers: HEADERS });
   if (!r.ok) throw new Error(`esearch HTTP ${r.status}`);
-  const d = await r.json();
-  return d.esearchresult?.idlist || [];
+  return (await r.json()).esearchresult?.idlist || [];
 }
 
 async function pmSummary(ids) {
@@ -95,13 +194,9 @@ async function pmSummary(ids) {
   const url = `${PM_BASE}esummary.fcgi?db=pubmed&id=${ids.join(',')}&retmode=json${PM_KEY}`;
   const r = await fetch(url, { headers: HEADERS });
   if (!r.ok) throw new Error(`esummary HTTP ${r.status}`);
-  const d = await r.json();
-  return d.result || {};
+  return (await r.json()).result || {};
 }
 
-const delay = ms => new Promise(r => setTimeout(r, ms));
-
-// ─── Journal category queries ─────────────────────────────────────────────────
 const JOURNAL_QUERIES = [
   { cat: 'Nutrition',               q: '(nutrition[MeSH] OR dietary interventions) AND (clinical trial[pt] OR systematic review[pt]) AND "last 1 year"[edat]' },
   { cat: 'Oncology',                q: '(neoplasms[MeSH]) AND (immunotherapy OR targeted therapy OR CAR-T) AND "last 1 year"[edat]' },
@@ -110,9 +205,9 @@ const JOURNAL_QUERIES = [
   { cat: 'Public Health',           q: '(public health[MeSH]) AND (systematic review[pt] OR meta-analysis[pt]) AND "last 1 year"[edat]' },
   { cat: 'Infectious Disease',      q: '(communicable diseases[MeSH]) AND (antimicrobial resistance OR vaccine) AND "last 1 year"[edat]' },
   { cat: 'Neurology',               q: '(nervous system diseases[MeSH]) AND (clinical trial[pt]) AND "last 1 year"[edat]' },
-  { cat: 'Endocrinology',           q: '(diabetes mellitus[MeSH] OR obesity[MeSH] OR endocrine system diseases[MeSH]) AND (clinical trial[pt]) AND "last 1 year"[edat]' },
-  { cat: "Women's Health",          q: '(womens health[MeSH] OR maternal health[MeSH] OR reproductive health) AND (clinical trial[pt]) AND "last 1 year"[edat]' },
-  { cat: 'Tropical & Global Health',q: '(tropical medicine[MeSH] OR global health[MeSH] OR neglected tropical diseases[MeSH]) AND "last 1 year"[edat]' },
+  { cat: 'Endocrinology',           q: '(diabetes mellitus[MeSH] OR obesity[MeSH]) AND (clinical trial[pt]) AND "last 1 year"[edat]' },
+  { cat: "Women's Health",          q: '(womens health[MeSH] OR maternal health[MeSH]) AND (clinical trial[pt]) AND "last 1 year"[edat]' },
+  { cat: 'Tropical & Global Health',q: '(tropical medicine[MeSH] OR global health[MeSH]) AND "last 1 year"[edat]' },
   { cat: 'Ethiopian Medicine',      q: 'Ethiopia[Affiliation] AND (health OR medicine OR disease) AND "last 2 years"[edat]' },
 ];
 
@@ -137,8 +232,8 @@ async function fetchJournals() {
           });
         });
       }
-      console.log(`  ✓ PubMed (${cat}): ${ids.length} articles`);
-      await delay(350); // respect 3 req/sec rate limit
+      console.log(`  ✓ PubMed (${cat}): ${ids.length}`);
+      await delay(350);
     } catch (e) {
       console.warn(`  ✗ PubMed (${cat}): ${e.message}`);
       await delay(500);
@@ -147,15 +242,14 @@ async function fetchJournals() {
   return journals;
 }
 
-// ─── Cache refresh ────────────────────────────────────────────────────────────
 async function refresh() {
   console.log(`\n[${new Date().toISOString()}] Refreshing content cache…`);
   try {
     const [news, journals] = await Promise.all([fetchFeeds(), fetchJournals()]);
-    if (news.length)    cache.news     = news;
+    if (news.length)     cache.news     = news;
     if (journals.length) cache.journals = journals;
     cache.lastFetch = Date.now();
-    console.log(`[cache] done — ${cache.news.length} news · ${cache.journals.length} journals`);
+    console.log(`[cache] ${cache.news.length} news · ${cache.journals.length} journals`);
   } catch (e) {
     console.error('[cache] refresh failed:', e);
   }
@@ -164,15 +258,4 @@ async function refresh() {
 refresh();
 setInterval(refresh, CACHE_TTL);
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
-app.get('/',             (_, res) => res.sendFile(path.join(__dirname, 'saris-garden.html')));
-app.get('/api/news',     (_, res) => res.json(cache.news));
-app.get('/api/journals', (_, res) => res.json(cache.journals));
-app.get('/api/status',   (_, res) => res.json({
-  lastFetch:    cache.lastFetch,
-  lastFetchAgo: cache.lastFetch ? Math.round((Date.now() - cache.lastFetch) / 60000) + ' min ago' : null,
-  newsCount:    cache.news.length,
-  journalCount: cache.journals.length,
-}));
-
-app.listen(PORT, () => console.log(`Sari's Garden running on :${PORT}`));
+app.listen(PORT, () => console.log(`Sari's Garden on :${PORT}`));

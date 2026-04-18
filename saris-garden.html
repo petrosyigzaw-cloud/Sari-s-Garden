@@ -477,16 +477,39 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(-
 
 <!-- SETTINGS MODAL -->
 <div id="settings-overlay" class="modal-overlay" style="display:none;" onclick="closeSettings(event)">
-  <div class="modal" onclick="event.stopPropagation()">
+  <div class="modal" style="max-width:480px;" onclick="event.stopPropagation()">
     <h3>Settings</h3>
-    <div class="modal-sub">Configure your Claude API key for AI-powered post generation in LinkedIn Studio.</div>
-    <div class="modal-warning">⚠️ Your API key is stored locally on this device only and is never sent anywhere except directly to Anthropic's API.</div>
-    <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:7px;">Claude API Key</label>
-    <input type="password" id="api-key-input" placeholder="sk-ant-api..." autocomplete="off" />
-    <div class="modal-actions">
-      <button class="btn btn-muted" onclick="closeSettings()">Cancel</button>
-      <button class="btn btn-danger btn-sm" onclick="clearApiKey()">Clear</button>
-      <button class="btn btn-primary" onclick="saveApiKey()">Save Key</button>
+
+    <!-- Change Password -->
+    <div style="margin-bottom:22px;padding-bottom:22px;border-bottom:1px solid var(--border);">
+      <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px;">Change Password</div>
+      <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:7px;">Current Password</label>
+      <input type="password" id="cur-pwd" placeholder="Current password" autocomplete="current-password" style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text);background:var(--bg);outline:none;margin-bottom:10px;"/>
+      <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:7px;">New Password</label>
+      <input type="password" id="new-pwd" placeholder="New password (min 6 characters)" autocomplete="new-password" style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text);background:var(--bg);outline:none;margin-bottom:10px;"/>
+      <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:7px;">Confirm New Password</label>
+      <input type="password" id="confirm-pwd" placeholder="Repeat new password" autocomplete="new-password" style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text);background:var(--bg);outline:none;margin-bottom:12px;"/>
+      <div id="pwd-msg" style="font-size:12.5px;display:none;padding:9px 12px;border-radius:8px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary btn-sm" onclick="changePassword()">Update Password</button>
+    </div>
+
+    <!-- Claude API Key -->
+    <div style="margin-bottom:4px;">
+      <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px;">Claude AI (optional)</div>
+      <div class="modal-warning">⚠️ API key is stored locally on this device and only sent to Anthropic's API.</div>
+      <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:7px;">Claude API Key</label>
+      <input type="password" id="api-key-input" placeholder="sk-ant-api..." autocomplete="off" />
+    </div>
+
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn btn-muted" onclick="closeSettings()">Close</button>
+      <button class="btn btn-ghost btn-sm" onclick="clearApiKey()">Clear API Key</button>
+      <button class="btn btn-primary" onclick="saveApiKey()">Save API Key</button>
+    </div>
+
+    <!-- Sign out -->
+    <div style="text-align:center;margin-top:18px;padding-top:16px;border-top:1px solid var(--border);">
+      <a href="/auth/logout" style="font-size:12.5px;color:var(--muted);text-decoration:none;">Sign out</a>
     </div>
   </div>
 </div>
@@ -1219,6 +1242,28 @@ function saveApiKey(){
   document.getElementById('settings-overlay').style.display='none';
 }
 function clearApiKey(){localStorage.removeItem('claude_api_key');document.getElementById('api-key-input').value='';showToast('API key cleared.');document.getElementById('studio-api-banner').style.display='flex';}
+async function changePassword(){
+  const cur=document.getElementById('cur-pwd').value;
+  const np=document.getElementById('new-pwd').value;
+  const cp=document.getElementById('confirm-pwd').value;
+  const msg=document.getElementById('pwd-msg');
+  function pwdMsg(text,ok){msg.textContent=text;msg.style.display='block';msg.style.background=ok?'rgba(6,214,160,.1)':'rgba(255,107,107,.1)';msg.style.color=ok?'#04a878':'#ff6b6b';msg.style.border=`1px solid ${ok?'rgba(6,214,160,.25)':'rgba(255,107,107,.25)'}`;  }
+  if(!np){return pwdMsg('Enter a new password.',false);}
+  if(np.length<6){return pwdMsg('Password must be at least 6 characters.',false);}
+  if(np!==cp){return pwdMsg('Passwords do not match.',false);}
+  try{
+    const res=await fetch('/auth/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({currentPassword:cur,newPassword:np})});
+    const d=await res.json();
+    if(d.ok){
+      pwdMsg('Password updated successfully.',true);
+      document.getElementById('cur-pwd').value='';
+      document.getElementById('new-pwd').value='';
+      document.getElementById('confirm-pwd').value='';
+    } else {
+      pwdMsg(d.error||'Could not update password.',false);
+    }
+  } catch{pwdMsg('Connection error. Try again.',false);}
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MODULE C: GOALS
