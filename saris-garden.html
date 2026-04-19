@@ -1388,55 +1388,94 @@ function renderJournalList(){
     </div>`;
   }).join('');
 }
-async function draftJournalPost(idx){
-  const j=JOURNALS[idx];
-  const tag1='#'+j.cat.replace(/[\s&'/]+/g,'');
-  const articleUrl=j.pmid?`https://pubmed.ncbi.nlm.nih.gov/${j.pmid}/`:`https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(j.title+' '+j.author.split(',')[0])}`;
+// Category-specific clinical implications paragraphs for journal drafts
+const JOURNAL_BODY2={
+  'Oncology':'The clinical translation question is always: does this change how I treat, refer, or counsel? In oncology, effect sizes matter as much as statistical significance — a modest survival benefit in a carefully selected trial population doesn\'t automatically translate to the same result in unselected patients with comorbidities. Access and tolerability are part of the equation alongside efficacy.',
+  'Cardiology':'In cardiovascular medicine, we have an unusually strong evidence base to benchmark against. The key question is where this fits relative to what\'s already established — does it confirm, extend, or challenge current first-line approaches? The cardiometabolic overlap means findings here often apply more broadly than the specialty label suggests.',
+  'Nutrition':'Nutrition research has a credibility problem it doesn\'t fully deserve. Much of it is lower-quality observational data — but that\'s changing. When a well-designed study in a rigorous journal reaches a clear conclusion about a dietary factor, it deserves the same serious engagement as pharmacological evidence. The counselling implications are real.',
+  'Infectious Disease':'The prescribing implications are worth working through carefully. In ID, the gap between what the evidence supports and what happens at the point of prescription is often large — and that gap has consequences, both for individual patients and for resistance patterns at the population level. Every prescribing decision is a stewardship decision.',
+  'Neurology':'Translating neurological trial data into practice is genuinely difficult — patient populations in neurology trials are often narrow, follow-up is rarely long enough, and effect sizes are sometimes modest. Worth reading with those filters in mind, while still engaging honestly with what the data shows.',
+  'Endocrinology':'The cardiometabolic implications usually extend well beyond endocrinology. Findings in diabetes and obesity medicine carry direct relevance for cardiovascular, renal, and primary care. The mechanistic story is often as clinically useful as the outcome data — especially for understanding how benefit accumulates over time.',
+  "Women's Health":'The historical underrepresentation of women in clinical trials means that when good data does emerge in this space, it fills a genuine gap. External validity is worth asking: how closely does the study population match the patients being seen? And are the outcomes chosen the ones that actually matter to patients?',
+  'Public Health':'Population-level data shapes the context that individual clinical decisions sit inside. The policy and practice implications run in parallel — and understanding both is part of being an effective clinician, not just a technically skilled one.',
+  'Tropical & Global Health':'Implementation is where global health evidence often gets stuck — the evidence exists, but infrastructure, supply chains, or funding don\'t follow. Worth reading not just for the finding but for what it implies about what\'s achievable with adequate support and political will.',
+  'Ethiopian Medicine':'Local evidence is more actionable than imported evidence — it reflects local pathogen profiles, patient populations, resource constraints, and health-seeking behavior. This kind of publication matters for building an evidence base that actually informs Ethiopian clinical decisions rather than approximating them from elsewhere.',
+  'General Medicine':'The value of papers like this is partly in the finding, and partly in the discipline of engaging with evidence that refines or challenges clinical intuition. The best clinical reasoning is updated continuously — and that requires actually reading the literature rather than just inheriting it second-hand.',
+};
 
-  // Parse title for study design signals to get a more specific opener
+function buildJournalTemplate(j){
+  const tag1='#'+j.cat.replace(/[\s&'/]+/g,'');
   const tl=j.title.toLowerCase();
+
+  // Study-design-aware opener
   let opener;
-  if(/systematic review|meta.analysis/.test(tl)){
+  if(/systematic review|meta.analysis/i.test(j.title)){
     opener=pick([
-      'When the systematic reviews align, it usually means the evidence has settled enough to act on.',
-      'Meta-analyses take time to produce. This one consolidates data worth knowing.',
-      'Systematic reviews are where the noise of individual studies tends to settle out.',
+      'A systematic review worth understanding — this is where the evidence on this question is starting to consolidate.',
+      'Meta-analyses take time to produce, and they\'re only as good as what they pool. This one is worth engaging with.',
+      'When a well-conducted systematic review reaches a clear conclusion, it carries a different kind of weight than individual studies.',
     ],j.title);
-  } else if(/randomized|randomised|\brct\b|phase [23]/.test(tl)){
+  } else if(/randomized|randomised|\brct\b|phase [23]/i.test(j.title)){
     opener=pick([
-      'Randomized trial data — the design matters here.',
-      'RCT data on this is something the field needed.',
-      'Trial data, not observational. Worth knowing.',
+      'Randomized trial data on this question — the design matters, and this is the kind of evidence the field needs.',
+      'RCT data, not observational. The causal inference here is on firmer ground than most of what gets cited in this space.',
+      'A randomized trial that adds meaningful weight to a clinical question that\'s been under-evidenced.',
     ],j.title);
-  } else if(/guideline|recommendation|consensus/.test(tl)){
+  } else if(/guideline|recommendation|consensus/i.test(j.title)){
     opener=pick([
-      'Guidelines shape practice more than individual papers. These are worth reviewing.',
-      'When guidance updates, it usually means the evidence has shifted enough to act on.',
-      'Updated recommendations in this area — worth knowing before the guidelines filter down.',
+      'Guidelines in this area have been updated — worth reading for both the recommendations and the reasoning behind them.',
+      'When clinical guidance changes, it usually means the evidence has shifted far enough that the old standard is no longer defensible.',
+      'Updated recommendations worth knowing before they filter down through institutional protocol.',
     ],j.title);
-  } else if(/cohort|prospective|population/.test(tl)){
+  } else if(/cohort|prospective|longitudinal/i.test(j.title)){
     opener=pick([
-      'Cohort data on this is useful — it reflects what actually happens in clinical populations.',
-      'A prospective study worth knowing about.',
-      'Real-world cohort data tends to be more honest than trial populations. This is worth reading.',
+      'Cohort data on this question — it follows real patients over real time, which tells a different story than trial populations.',
+      'A prospective study worth engaging with. Observational data can\'t prove causation, but it can show what actually happens in clinical populations.',
+      'Real-world data on this — not a trial, but the kind of evidence that reveals what happens outside controlled conditions.',
     ],j.title);
   } else {
     opener=pick(JOURNAL_OPENER_POOLS[j.cat]||JOURNAL_OPENER_POOLS['General Medicine'],j.title);
   }
 
+  // Methodology context paragraph
+  let body1;
+  if(/systematic review|meta.analysis/i.test(j.title)){
+    body1=`This review consolidates evidence on "${j.title.replace(/:.*/,'').trim()}." Published in ${j.journal} — which holds systematic reviews to a high methodological standard. The key questions when reading: how consistent is the effect across included studies, what does the heterogeneity look like, and were the included populations close enough to the patients you\'re actually seeing? A pooled estimate with high I² needs careful interpretation before applying it broadly.`;
+  } else if(/randomized|randomised|\brct\b|phase [23]/i.test(j.title)){
+    body1=`What I look for in any RCT: the primary endpoint, whether the effect size is clinically meaningful (not just statistically significant), the dropout rate, and what the control arm actually received. ${j.journal} applies rigorous peer review to trial submissions — a signal that the methodology holds up to scrutiny. The question of external validity remains: how closely does the trial population resemble the patients in front of you, and what were the exclusion criteria?`;
+  } else if(/guideline|recommendation|consensus/i.test(j.title)){
+    body1=`Guidelines in ${j.cat.toLowerCase()} occupy a specific role — they\'re both a summary of the best available evidence and a statement about current standard of care. When they\'re updated, it\'s usually because new trial data moved the needle, or accumulated safety signals changed the risk-benefit calculation. Reading the justification section matters as much as the recommendations — that\'s where you understand why the guidance changed and how certain the evidence actually is.`;
+  } else if(/cohort|prospective|longitudinal/i.test(j.title)){
+    body1=`Cohort studies do something RCTs often can\'t: they follow real patients in real health systems over realistic timescales. The limitation is confounding — it\'s harder to isolate causation when you can\'t randomize. For questions where randomization isn\'t feasible or ethical, well-designed cohort data is often the best evidence available. Published in ${j.journal}, which sets a high bar for observational submissions in terms of confounder adjustment and follow-up rigour.`;
+  } else {
+    body1=pick([
+      `This paper addresses a question that comes up regularly in clinical practice — and the evidence on it has often been less settled than the confidence of practitioners who precede it. Published in ${j.journal}, which is selective about what it accepts in ${j.cat.toLowerCase()}. Worth reading both for the findings and the methodology, since the design determines how much weight the conclusions can actually carry.`,
+      `The question this paper asks sits at the intersection of basic evidence and daily clinical decisions. ${j.journal} publishes work with high methodological standards — worth factoring in when deciding how much to update your clinical reasoning based on what this shows.`,
+    ],j.title);
+  }
+
+  const body2=JOURNAL_BODY2[j.cat]||JOURNAL_BODY2['General Medicine'];
   const closing=pick(JOURNAL_CLOSING_POOLS[j.cat]||JOURNAL_CLOSING_POOLS['General Medicine'],j.title+j.journal);
 
-  const draft=`${opener}
+  return`${opener}
 
 "${j.title}"
 ${j.author} — ${j.journal}, ${j.year}
 
+${body1}
+
+${body2}
+
 ${closing}
 
 📖 ${j.journal}
-${articleUrl}
 
 #MedicalResearch ${tag1} #ClinicalMedicine`;
+}
+
+async function draftJournalPost(idx){
+  const j=JOURNALS[idx];
+  const articleUrl=j.pmid?`https://pubmed.ncbi.nlm.nih.gov/${j.pmid}/`:`https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(j.title+' '+j.author.split(',')[0])}`;
 
   const sourceHtml=`<a href="${j.jUrl}" target="_blank" rel="noopener">${esc(j.journal)}</a> &bull; ${j.year} &bull; <a href="${articleUrl}" target="_blank" rel="noopener">${j.pmid?'View on PubMed →':'Find on PubMed →'}</a>`;
   document.getElementById('journal-draft-source').innerHTML=sourceHtml;
@@ -1452,7 +1491,15 @@ ${articleUrl}
   // Try Claude API if key is set
   if(getApiKey()){
     ta.value='Generating draft…';ta.disabled=true;
-    const sys=`You are helping Dr. Sari, an Ethiopian medical researcher and physician, write a LinkedIn post about a journal article. She explains what the paper is actually about and why it matters clinically — in her own voice, first person, thoughtful, specific. Not corporate. Not AI-sounding. 150–200 words. End with 3–4 relevant hashtags. Do NOT open with the paper title verbatim. Do NOT say "paradigm shift", "it is clear that", or "I encourage every clinician".`;
+    const sys=`You are helping Dr. Sari, an Ethiopian medical researcher and physician, write a detailed LinkedIn post about a journal paper. She writes in first person — specific, analytical, clinically grounded. Not corporate. Not AI-sounding. No "paradigm shift", "game-changer", "it is clear that", "I encourage every clinician".
+
+The post should be 220–280 words with this structure:
+1. Opening (2-3 sentences): frame why this clinical question matters — not the title verbatim
+2. Methodology paragraph: what the study examined, why the study design matters, and what that means for how much weight to give the findings. Use your knowledge of the field.
+3. Clinical implications paragraph: what does this confirm, challenge, or add to current practice? What should a clinician actually do with this information?
+4. A closing sentence with a specific observation or honest question
+
+End with "📖 [journal name]" on its own line, then 3–4 relevant hashtags. Do NOT include any URL in the post body.`;
     const user=`Paper: "${j.title}"\nAuthors: ${j.author}\nJournal: ${j.journal}, ${j.year}\nCategory: ${j.cat}`;
     try{
       const result=await callClaude(sys,user);
@@ -1460,7 +1507,7 @@ ${articleUrl}
     }catch(e){showToast('AI draft failed, using template.');}
     ta.disabled=false;
   }
-  ta.value=draft;
+  ta.value=buildJournalTemplate(j);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
