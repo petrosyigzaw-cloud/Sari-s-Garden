@@ -127,7 +127,10 @@ app.get('/auth/logout', (req, res) => {
 });
 
 // ─── Protected routes ─────────────────────────────────────────────────────────
-app.get('/',             requireAuth, (_, res) => res.sendFile(path.join(__dirname, 'saris-garden.html')));
+app.get('/',             requireAuth, (_, res) => {
+  res.setHeader('Cache-Control','no-store');
+  res.sendFile(path.join(__dirname, 'saris-garden.html'));
+});
 app.get('/api/news',     requireAuth, (_, res) => res.json(cache.news));
 app.get('/api/journals', requireAuth, (_, res) => res.json(cache.journals));
 app.get('/api/status',   requireAuth, (_, res) => res.json({
